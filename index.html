@@ -290,7 +290,8 @@ function App() {
     const special  = perMode ? pantoneR*sc*qty/1000 : pantoneR*sc;
 
     // Running charge
-    const run = perMode ? n(printing.runCharge)*qty/1000 : n(printing.runCharge);
+    // Run charge only applies when special/Pantone colors are used
+    const run = sc > 0 ? (perMode ? n(printing.runCharge)*qty/1000 : n(printing.runCharge)) : 0;
 
     const ink = n(printing.inkCharge);
     return {total:base+special+run+ink, baseTotal:base, specialTotal:special, runTotal:run};
@@ -614,7 +615,7 @@ function App() {
                 <Field label="Paper Qty (sheets)" value={printing.paperQty} onChange={v=>setPrinting({...printing,paperQty:v})} />
                 {/* Pantone now shows for BOTH Normal and LED */}
                 <Field label="Pantone / Special Colors" value={printing.specialColors} onChange={v=>setPrinting({...printing,specialColors:v})} />
-                <Field label={printing.rateMode==="Per 1000 Sheets" ? "Run Charge / 1000" : "Run Charge (Overall)"} value={printing.runCharge} onChange={v=>setPrinting({...printing,runCharge:v})} />
+                <Field label={printing.rateMode==="Per 1000 Sheets" ? "Run Charge / 1000 (Special)" : "Run Charge (Special Colors)"} value={printing.runCharge} onChange={v=>setPrinting({...printing,runCharge:v})} note={n(printing.specialColors)===0 ? "Add special colors to activate" : ""} hide={false} />
                 <Field label="Ink Charge (₹)" value={printing.inkCharge} onChange={v=>setPrinting({...printing,inkCharge:v})} />
               </Row>
 
@@ -627,7 +628,7 @@ function App() {
               <div style={{ marginTop:8 }}>
                 <SubRow label={printing.type==="LED"?"LED Base (₹"+printing.ledRate+"/sheet)":"Base Printing"} value={printingCalc.baseTotal} />
                 {n(printing.specialColors)>0 && <SubRow label={`Pantone × ${printing.specialColors} color(s) ${printing.rateMode==="Per 1000 Sheets"?"@ ₹"+printing.pantoneRate+"/1000":"@ ₹"+printing.pantoneRate+" flat"}`} value={printingCalc.specialTotal} />}
-                <SubRow label={printing.rateMode==="Per 1000 Sheets"?"Run Charge / 1000":"Run Charge (Overall)"} value={printingCalc.runTotal} />
+                {n(printing.specialColors) > 0 && <SubRow label={printing.rateMode==="Per 1000 Sheets"?"Run Charge / 1000 (Special Colors)":"Run Charge (Special Colors — Flat)"} value={printingCalc.runTotal} />}
                 {n(printing.inkCharge)>0 && <SubRow label="Ink Charge" value={n(printing.inkCharge)} />}
                 <SubRow label="Total Printing" value={printingCalc.total} highlight />
               </div>
