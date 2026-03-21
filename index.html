@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PrintCost Pro — Offset Costing Estimator</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif; background: #f0f5ff; color: #1e2d50; }
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+  input[type=number] { -moz-appearance: textfield; }
+  input:focus, select:focus { border-color: #1a4fd6 !important; box-shadow: 0 0 0 3px rgba(26,79,214,.12) !important; outline: none; }
+  select option { background: #fff; color: #1e2d50; }
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-thumb { background: #c5d8f8; border-radius: 4px; }
+  .toggle-switch { width: 44px; height: 24px; border-radius: 12px; display: flex; align-items: center; padding: 0 3px; transition: background .2s; cursor: pointer; flex-shrink: 0; border: none; }
+  .toggle-knob { width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: transform .2s; }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .hover-row:hover { background: #f5f8ff !important; }
+  @media print {
+    .no-print { display: none !important; }
+    body { background: #fff; }
+    .print-summary { display: block !important; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo } = React;
+
+const T = {
+  bgPage:"#f0f5ff", bgCard:"#ffffff", bgHeader:"#1a4fd6",
+  bgSub:"#f5f8ff", bgInput:"#ffffff", bgRo:"#eef4ff", bgSection:"#e8f0fe",
+  border:"#c5d8f8", primary:"#1a4fd6", primaryLt:"#3b70e8", primaryXl:"#dbeafe",
+  text:"#1e2d50", textMid:"#4a6494", textDim:"#8ca5cc",
+  success:"#16a34a", danger:"#dc2626",
+  shadow:"0 1px 4px rgba(26,79,214,.10)", shadowMd:"0 4px 16px rgba(26,79,214,.12)",
+};
+
+const n = v => parseFloat(v) || 0;
+const fmt = v => Number(v||0).toLocaleString("en-IN", {minimumFractionDigits:2, maximumFractionDigits:2});
+
+const BASE_INP = { width:"100%", padding:"8px 10px", borderRadius:6, border:"1.5px solid #c5d8f8", fontSize:13, color:"#1e2d50", background:"#ffffff", outline:"none", fontFamily:"inherit" };
+const BASE_RO  = { ...BASE_INP, background:"#eef4ff", color:"#1a4fd6", fontWeight:700, cursor:"default" };
+const LBL = { display:"block", fontSize:10, fontWeight:700, color:"#4a6494", textTransform:"uppercase", letterSpacing:1.1, marginBottom:4 };
+
+/* ── PAPER WEIGHT FORMULA ──────────────────────────────────
+   Standard formula: Weight(Kg) = L × W × GSM × TotalSheets / (baseConst × reamsBase)
+   baseConst = 3100 (industry standard), reamsBase = 500 (sheets per ream)
+   ────────────────────────────────────────────────────────── */
+function calcPaperWeight(L, W, GSM, totalSheets, baseConst, reamsBase) {
+  return L * W * GSM * totalSheets / (baseConst * reamsBase);
+}
+
+/* Sheet qty per unit */
+function sheetsPerUnit(unit) {
+  return unit === "Packet" ? 100 : unit === "Ream" ? 500 : 144;
+}
+
+function Field({ label, value, onChange, options, readOnly, placeholder="0", hide, note }) {
+  if (hide) return null;
+  return (
+    <div style={{ flex:1, minWidth:85 }}>
+      {label && <label style={LBL}>{label}</label>}
+      {options
+        ? <select value={value} onChange={e=>onChange(e.target.value)}
+            style={{ ...BASE_INP, cursor:"pointer", appearance:"none", WebkitAppearance:"none",
+              backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath fill='%231a4fd6' d='M5 7L0 2h10z'/%3E%3C/svg%3E")`,
+              backgroundRepeat:"no-repeat", backgroundPosition:"right 9px center", paddingRight:26 }}>
+            {options.map(o=><option key={o}>{o}</option>)}
+          </select>
+        : <input type={readOnly?"text":"number"} value={value} placeholder={placeholder}
+            onChange={e=>!readOnly&&onChange(e.target.value)} readOnly={readOnly}
+            style={readOnly ? BASE_RO : BASE_INP} />
+      }
+      {note && <div style={{ fontSize:10, color:"#3b70e8", marginTop:3, fontStyle:"italic" }}>{note}</div>}
+    </div>
+  );
+}
+
+function Toggle({ on, onClick }) {
+  return (
+    <button className="toggle-switch" onClick={onClick} style={{ background: on?"#1a4fd6":"#cbd5e1" }}>
+      <div className="toggle-knob" style={{ transform: on?"translateX(20px)":"translateX(0)" }} />
+    </button>
+  );
+}
+
+function SectionCard({ title, icon, enabled, onToggle, children, total, alwaysOn }) {
+  const active = enabled || alwaysOn;
+  return (
+    <div style={{ background:T.bgCard, borderRadius:10, marginBottom:10, overflow:"hidden",
+      border:`1.5px solid ${active?T.primary:T.border}`,
+      boxShadow: active?T.shadowMd:T.shadow }}>
+      <div style={{ background:active?T.bgSection:"#fafbff", padding:"11px 18px",
+        display:"flex", alignItems:"center", justifyContent:"space-between",
+        borderBottom:`1.5px solid ${active?T.border:"#eef2fb"}`,
+        cursor:alwaysOn?"default":"pointer" }}
+        onClick={()=>!alwaysOn&&onToggle(!enabled)}>
+        <div style={{ display:"flex", alignItems:"center", gap:9 }}>
+          <span style={{ fontSize:17 }}>{icon}</span>
+          <span style={{ color:active?T.primary:T.textMid, fontWeight:800, fontSize:13 }}>{title}</span>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          {active && total>0 && (
+            <span style={{ color:T.success, fontFamily:"monospace", fontSize:13, fontWeight:800,
+              background:"#f0fdf4", border:"1px solid #bbf7d0", padding:"2px 10px", borderRadius:6 }}>
+              ₹{fmt(total)}
+            </span>
+          )}
+          {!alwaysOn && <Toggle on={enabled} onClick={e=>{e.stopPropagation();onToggle(!enabled);}} />}
+        </div>
+      </div>
+      {active && <div style={{ padding:"16px 18px 14px" }}>{children}</div>}
+    </div>
+  );
+}
+
+const Row = ({children}) => <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:10, alignItems:"flex-end" }}>{children}</div>;
+
+function SubRow({ label, value, highlight }) {
+  return (
+    <div style={{ display:"flex", justifyContent:"space-between", padding:"6px 12px",
+      background:highlight?T.primaryXl:T.bgSub, borderRadius:6, marginTop:4,
+      border:`1px solid ${highlight?T.border:"#eef2fb"}` }}>
+      <span style={{ color:T.textMid, fontSize:12 }}>{label}</span>
+      <span style={{ color:highlight?T.primary:T.textMid, fontFamily:"monospace", fontSize:13, fontWeight:highlight?800:500 }}>₹{fmt(value)}</span>
+    </div>
+  );
+}
+
+function Hint({ text }) {
+  return (
+    <div style={{ display:"inline-flex", alignItems:"center", gap:5, background:"#eff6ff",
+      border:"1px solid #bfdbfe", borderRadius:5, padding:"4px 10px", marginTop:8 }}>
+      <span style={{ fontSize:11, color:T.primary }}>ƒ</span>
+      <span style={{ fontSize:11, color:T.primaryLt, fontFamily:"monospace" }}>{text}</span>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════ */
+
+/* ── DEFAULT RATES ── */
+const DEFAULTS = {
+  paperSettings: { baseConst:3100, reamsBase:500 },
+  plates:        { enabled:false, normalRate:250, normalQty:"", heatingRate:320, heatingQty:"" },
+  printing:      { enabled:false, type:"Normal", numColors:4, paperQty:"", specialColors:0, runCharge:500, inkCharge:0, rateMode:"Per 1000 Sheets", tier1000:1200, tier5000:1000, tier10000:900, tierAbove:800, ledRate:3, pantoneRate:300 },
+  varnish:       { enabled:false, length:"",width:"",sheetQty:"", divisor:4, paisa:0.01 },
+  uv:            { enabled:false, type:"Full UV", length:"",width:"",sheetQty:"", spotPerSheet:100, spotInitial:1000, fullUVDivisor:4, hybridUVDivisor:2.5, uvPaisa:0.01 },
+  lamination:    { enabled:false, type:"Gloss", length:"",width:"",sheetQty:"", velvetRate:8.28, glossDivisor:3, glossPaisa:0.01, mattDivisor:1.5, mattPaisa:0.01 },
+  foilingBlock:  { enabled:false, length:"",width:"", rate:1 },
+  dieBlock:      { enabled:false, numUps:1, rate:500 },
+  dieCutting:    { enabled:false, length:"",width:"", numUps:1, rate:0.5 },
+  pasting:       { enabled:false, qty:"", rate:0 },
+  packaging:     { enabled:false, qty:"", rate:0 },
+  dispatch:      { enabled:false, qty:"", rate:0 },
+};
+
+/* ── LOAD SAVED RATES FROM LOCALSTORAGE (merge with defaults) ── */
+function loadSaved(key) {
+  try {
+    const saved = localStorage.getItem("printcost_"+key);
+    if(saved) return {...DEFAULTS[key], ...JSON.parse(saved)};
+  } catch(e) {}
+  return DEFAULTS[key];
+}
+
+/* ── SAVE ALL RATES TO LOCALSTORAGE ── */
+function saveAllRates(data) {
+  try {
+    Object.entries(data).forEach(([key, val]) => {
+      localStorage.setItem("printcost_"+key, JSON.stringify(val));
+    });
+    return true;
+  } catch(e) { return false; }
+}
+
+function App() {
+  const [showSettings, setShowSettings] = useState(false);
+  const [showGuide, setShowGuide]       = useState(false);
+  const [saveMsg, setSaveMsg]           = useState("");
+  const [jobName, setJobName]           = useState("");
+  const [clientName, setClientName]     = useState("");
+  const [jobDate, setJobDate]           = useState(new Date().toISOString().split("T")[0]);
+
+  /* ── PAPER SETTINGS (editable in Settings modal) ── */
+  const [paperSettings, setPaperSettings] = useState(loadSaved("paperSettings"));
+
+  const [paperRows, setPaperRows] = useState([
+    { id:1, length:"", width:"", gsm:"", unit:"Packet", sheetQty:"", ratePerKg:"" }
+  ]);
+
+  const [plates,setPlates]             = useState(loadSaved("plates"));
+  const [printing,setPrinting]         = useState(loadSaved("printing"));
+  const [varnish,setVarnish]           = useState(loadSaved("varnish"));
+  const [uv,setUV]                     = useState(loadSaved("uv"));
+  const [lamination,setLamination]     = useState(loadSaved("lamination"));
+  const [foiling,setFoiling]           = useState({ enabled:false, length:"",width:"", numBlocks:1, numSheets:"" });
+  const [foilingBlock,setFoilingBlock] = useState(loadSaved("foilingBlock"));
+  const [dieBlock,setDieBlock]         = useState(loadSaved("dieBlock"));
+  const [dieCutting,setDieCutting]     = useState(loadSaved("dieCutting"));
+  const [pasting,setPasting]           = useState(loadSaved("pasting"));
+  const [packaging,setPackaging]       = useState(loadSaved("packaging"));
+  const [dispatch,setDispatch]         = useState(loadSaved("dispatch"));
+
+  /* ── SAVE RATES FUNCTION (called on Save & Apply) ── */
+  const handleSaveSettings = () => {
+    const ok = saveAllRates({
+      paperSettings, plates, printing, varnish, uv, lamination,
+      foilingBlock, dieBlock, dieCutting, pasting, packaging, dispatch
+    });
+    setSaveMsg(ok ? "✅ Rates saved! Will auto-load next time." : "⚠️ Could not save.");
+    setTimeout(()=>setSaveMsg(""), 3000);
+    setShowSettings(false);
+  };
+
+  /* ── RESET RATES FUNCTION ── */
+  const handleResetRates = () => {
+    if(!confirm("Reset all rates to factory defaults?")) return;
+    Object.keys(DEFAULTS).forEach(k => localStorage.removeItem("printcost_"+k));
+    setPaperSettings(DEFAULTS.paperSettings);
+    setPlates(DEFAULTS.plates);
+    setPrinting(DEFAULTS.printing);
+    setVarnish(DEFAULTS.varnish);
+    setUV(DEFAULTS.uv);
+    setLamination(DEFAULTS.lamination);
+    setFoilingBlock(DEFAULTS.foilingBlock);
+    setDieBlock(DEFAULTS.dieBlock);
+    setDieCutting(DEFAULTS.dieCutting);
+    setPasting(DEFAULTS.pasting);
+    setPackaging(DEFAULTS.packaging);
+    setDispatch(DEFAULTS.dispatch);
+    setSaveMsg("♻️ Rates reset to defaults.");
+    setTimeout(()=>setSaveMsg(""), 3000);
+  };
+
+  /* ══ PAPER CALCULATION ══════════════════════════════════════
+     User enters: Length, Width, GSM, Unit type, SHEET QTY (total sheets), Rate/Kg
+     Weight = L × W × GSM × SheetQty / (baseConst × reamsBase)
+     e.g. baseConst=3100, reamsBase=500
+     Equivalent units = SheetQty / sheetsPerUnit
+  ════════════════════════════════════════════════════════════ */
+  const paperCalc = useMemo(() => {
+    const bc = n(paperSettings.baseConst) || 3100;
+    const rb = n(paperSettings.reamsBase) || 500;
+    let ts=0, tw=0, tp=0;
+    const rows = paperRows.map(row => {
+      const L=n(row.length), W=n(row.width), GSM=n(row.gsm);
+      const sheetQty=n(row.sheetQty), rate=n(row.ratePerKg);
+      const spu = sheetsPerUnit(row.unit);
+      const equivUnits = sheetQty > 0 ? (sheetQty / spu).toFixed(2) : 0;
+      const weight = calcPaperWeight(L, W, GSM, sheetQty, bc, rb);
+      const price = weight * rate;
+      ts += sheetQty; tw += weight; tp += price;
+      return { ...row, spu, sheetQty, equivUnits, weight, price };
+    });
+    return { rows, totalSheets:ts, totalWeight:tw, totalPrice:tp };
+  }, [paperRows, paperSettings]);
+
+  const platesTotal = useMemo(() => !plates.enabled?0:n(plates.normalQty)*n(plates.normalRate)+n(plates.heatingQty)*n(plates.heatingRate), [plates]);
+
+  const printingCalc = useMemo(() => {
+    if(!printing.enabled) return {total:0,baseTotal:0,specialTotal:0,runTotal:0};
+    const qty     = n(printing.paperQty);
+    const colors  = n(printing.numColors)||1;
+    const sc      = n(printing.specialColors);
+    const perMode = printing.rateMode === "Per 1000 Sheets";
+
+    // Base printing cost
+    let base = 0;
+    if(printing.type === "LED") {
+      base = (n(printing.ledRate)||3) * qty;
+    } else {
+      const tierRate = qty<=1000 ? (n(printing.tier1000)||1200)
+                     : qty<=5000 ? (n(printing.tier5000)||1000)
+                     : qty<=10000? (n(printing.tier10000)||900)
+                     :             (n(printing.tierAbove)||800);
+      base = perMode ? tierRate/4*colors*qty/1000 : tierRate/4*colors;
+    }
+
+    // Pantone / Special ink — applies to BOTH Normal and LED
+    const pantoneR = n(printing.pantoneRate)||300;
+    const special  = perMode ? pantoneR*sc*qty/1000 : pantoneR*sc;
+
+    // Running charge
+    const run = perMode ? n(printing.runCharge)*qty/1000 : n(printing.runCharge);
+
+    const ink = n(printing.inkCharge);
+    return {total:base+special+run+ink, baseTotal:base, specialTotal:special, runTotal:run};
+  }, [printing]);
+
+  const varnishTotal    = useMemo(()=>!varnish.enabled?0:n(varnish.length)*n(varnish.width)/(n(varnish.divisor)||4)*(n(varnish.paisa)||0.01)*n(varnish.sheetQty),[varnish]);
+  const uvCalc          = useMemo(()=>{
+    if(!uv.enabled) return {total:0,extra:0,base:0};
+    const area=n(uv.length)*n(uv.width), sheets=n(uv.sheetQty);
+    let base=0,extra=0;
+    if(uv.type==="Full UV")    base=area/(n(uv.fullUVDivisor)||4)*(n(uv.uvPaisa)||0.01)*sheets;
+    else if(uv.type==="Hybrid UV") base=area/(n(uv.hybridUVDivisor)||2.5)*(n(uv.uvPaisa)||0.01)*sheets;
+    else {base=n(uv.spotPerSheet)*sheets; extra=n(uv.spotInitial);}
+    return {total:base+extra,base,extra};
+  },[uv]);
+
+  const laminationTotal = useMemo(()=>{
+    if(!lamination.enabled) return 0;
+    const area=n(lamination.length)*n(lamination.width), sheets=n(lamination.sheetQty);
+    if(lamination.type==="Gloss") return area/(n(lamination.glossDivisor)||3)*(n(lamination.glossPaisa)||0.01)*sheets;
+    if(lamination.type==="Matt")  return area/(n(lamination.mattDivisor)||1.5)*(n(lamination.mattPaisa)||0.01)*sheets;
+    return (n(lamination.velvetRate)||8.28)*sheets;
+  },[lamination]);
+
+  const foilingTotal   = useMemo(()=>!foiling.enabled?0:n(foiling.length)*n(foiling.width)*2*n(foiling.numBlocks)*n(foiling.numSheets),[foiling]);
+  const foilingBTotal  = useMemo(()=>!foilingBlock.enabled?0:n(foilingBlock.length)*n(foilingBlock.width)*n(foilingBlock.rate),[foilingBlock]);
+  const dieBlockTotal  = useMemo(()=>!dieBlock.enabled?0:n(dieBlock.numUps)*n(dieBlock.rate),[dieBlock]);
+  const dieCutTotal    = useMemo(()=>!dieCutting.enabled?0:n(dieCutting.length)*n(dieCutting.width)*n(dieCutting.numUps)*n(dieCutting.rate),[dieCutting]);
+  const pastingTotal   = useMemo(()=>!pasting.enabled?0:n(pasting.qty)*n(pasting.rate),[pasting]);
+  const packagingTotal = useMemo(()=>!packaging.enabled?0:n(packaging.qty)*n(packaging.rate),[packaging]);
+  const dispatchTotal  = useMemo(()=>!dispatch.enabled?0:n(dispatch.qty)*n(dispatch.rate),[dispatch]);
+
+  const grandTotal = paperCalc.totalPrice+platesTotal+printingCalc.total+varnishTotal+uvCalc.total+laminationTotal+foilingTotal+foilingBTotal+dieBlockTotal+dieCutTotal+pastingTotal+packagingTotal+dispatchTotal;
+
+  const summaryItems = [
+    ["📄 Paper", paperCalc.totalPrice, true],
+    ["🖨 Plates", platesTotal, plates.enabled],
+    ["🎨 Printing", printingCalc.total, printing.enabled],
+    ["✨ Varnish", varnishTotal, varnish.enabled],
+    ["💡 UV Coating", uvCalc.total, uv.enabled],
+    ["🏷 Lamination", laminationTotal, lamination.enabled],
+    ["🌟 Foiling", foilingTotal, foiling.enabled],
+    ["🔲 Foiling Block", foilingBTotal, foilingBlock.enabled],
+    ["⬛ Die Block", dieBlockTotal, dieBlock.enabled],
+    ["✂️ Die Cutting", dieCutTotal, dieCutting.enabled],
+    ["📦 Pasting", pastingTotal, pasting.enabled],
+    ["🎁 Packaging", packagingTotal, packaging.enabled],
+    ["🚚 Dispatch", dispatchTotal, dispatch.enabled],
+  ].filter(([,,en])=>en);
+
+  /* ══ SETTINGS GROUPS ═════════════════════════════════════ */
+  const sinp = { ...BASE_INP };
+  const sro  = { ...BASE_INP, background:"#eef4ff", color:"#1a4fd6", fontWeight:700, cursor:"default" };
+  const slbl = { display:"block", fontSize:10, fontWeight:700, color:"#4a6494", textTransform:"uppercase", letterSpacing:1, marginBottom:4 };
+
+  const settingGroups = [
+    /* ── PAPER (the missing section!) ── */
+    { title:"Paper — Weight Formula", icon:"📄", color:"#1a4fd6", fields:[
+      { label:"Base Constant", get:()=>paperSettings.baseConst, set:v=>setPaperSettings(p=>({...p,baseConst:v})),
+        hint:"Industry standard: 3100 (GSM paper constant)" },
+      { label:"Sheets per Ream (base)", get:()=>paperSettings.reamsBase, set:v=>setPaperSettings(p=>({...p,reamsBase:v})),
+        hint:"Standard: 500 sheets per ream" },
+    ]},
+    { title:"Paper — Unit Reference", icon:"📋", color:"#1a4fd6", fields:[
+      { label:"Sheets per Packet", get:()=>100, ro:true, hint:"Fixed: 100 sheets" },
+      { label:"Sheets per Ream", get:()=>500, ro:true, hint:"Fixed: 500 sheets" },
+      { label:"Sheets per Gross", get:()=>144, ro:true, hint:"Fixed: 144 sheets" },
+    ]},
+    { title:"Plates", icon:"🖨", color:"#2563eb", fields:[
+      { label:"Normal Plate Rate (₹)", get:()=>plates.normalRate, set:v=>setPlates(p=>({...p,normalRate:v})) },
+      { label:"Heating Plate Rate (₹)", get:()=>plates.heatingRate, set:v=>setPlates(p=>({...p,heatingRate:v})) },
+    ]},
+    { title:"Printing — Normal Tiers (Editable)", icon:"🎨", color:"#7c3aed", fields:[
+      { label:"Run Charge / 1000 Sheets", get:()=>printing.runCharge, set:v=>setPrinting(p=>({...p,runCharge:v})), hint:"Changes with rate mode" },
+      { label:"≤1000 sheets — Rate", get:()=>printing.tier1000, set:v=>setPrinting(p=>({...p,tier1000:v})), hint:"Default: 1200" },
+      { label:"≤5000 sheets — Rate", get:()=>printing.tier5000, set:v=>setPrinting(p=>({...p,tier5000:v})), hint:"Default: 1000" },
+      { label:"≤10000 sheets — Rate", get:()=>printing.tier10000, set:v=>setPrinting(p=>({...p,tier10000:v})), hint:"Default: 900" },
+      { label:">10000 sheets — Rate", get:()=>printing.tierAbove, set:v=>setPrinting(p=>({...p,tierAbove:v})), hint:"Default: 800" },
+      { label:"Pantone / Special Rate", get:()=>printing.pantoneRate, set:v=>setPrinting(p=>({...p,pantoneRate:v})), hint:"Default: ₹300 per 1000 / per color" },
+    ]},
+    { title:"Printing — LED", icon:"💡", color:"#7c3aed", fields:[
+      { label:"LED Rate / Sheet (₹)", get:()=>printing.ledRate, set:v=>setPrinting(p=>({...p,ledRate:v})), hint:"Default: ₹3/sheet" },
+    ]},
+    { title:"Varnish", icon:"✨", color:"#0891b2", fields:[
+      { label:"Divisor (sq inch)", get:()=>varnish.divisor, set:v=>setVarnish(p=>({...p,divisor:v})), hint:"Default: 4" },
+      { label:"Rate (₹ per unit)", get:()=>varnish.paisa, set:v=>setVarnish(p=>({...p,paisa:v})), hint:"Default: 0.01 (1 paisa)" },
+    ]},
+    { title:"UV — Full UV", icon:"🌕", color:"#0369a1", fields:[
+      { label:"Divisor (sq inch)", get:()=>uv.fullUVDivisor, set:v=>setUV(p=>({...p,fullUVDivisor:v})), hint:"Default: 4" },
+      { label:"Rate (₹ per unit)", get:()=>uv.uvPaisa, set:v=>setUV(p=>({...p,uvPaisa:v})), hint:"Default: 0.01" },
+    ]},
+    { title:"UV — Hybrid UV", icon:"🌗", color:"#0369a1", fields:[
+      { label:"Divisor (sq inch)", get:()=>uv.hybridUVDivisor, set:v=>setUV(p=>({...p,hybridUVDivisor:v})), hint:"Default: 2.5" },
+      { label:"Rate (₹ per unit)", get:()=>uv.uvPaisa, set:v=>setUV(p=>({...p,uvPaisa:v})), hint:"Shared with Full UV" },
+    ]},
+    { title:"UV — Spot UV", icon:"🌑", color:"#0369a1", fields:[
+      { label:"Rate / Sheet (₹)", get:()=>uv.spotPerSheet, set:v=>setUV(p=>({...p,spotPerSheet:v})) },
+      { label:"Initial / Setup Charge (₹)", get:()=>uv.spotInitial, set:v=>setUV(p=>({...p,spotInitial:v})) },
+    ]},
+    { title:"Lamination — Gloss", icon:"🟢", color:"#16a34a", fields:[
+      { label:"Divisor (sq inch)", get:()=>lamination.glossDivisor, set:v=>setLamination(p=>({...p,glossDivisor:v})), hint:"Default: 3" },
+      { label:"Rate (₹ per unit)", get:()=>lamination.glossPaisa, set:v=>setLamination(p=>({...p,glossPaisa:v})), hint:"Default: 0.01" },
+    ]},
+    { title:"Lamination — Matt", icon:"🔵", color:"#16a34a", fields:[
+      { label:"Divisor (sq inch)", get:()=>lamination.mattDivisor, set:v=>setLamination(p=>({...p,mattDivisor:v})), hint:"Default: 1.5" },
+      { label:"Rate (₹ per unit)", get:()=>lamination.mattPaisa, set:v=>setLamination(p=>({...p,mattPaisa:v})), hint:"Default: 0.01" },
+    ]},
+    { title:"Lamination — Velvet", icon:"🟣", color:"#16a34a", fields:[
+      { label:"Rate / Sheet (₹)", get:()=>lamination.velvetRate, set:v=>setLamination(p=>({...p,velvetRate:v})), hint:"Default: ₹8.28/sheet" },
+    ]},
+    { title:"Foiling", icon:"🌟", color:"#b45309", fields:[
+      { label:"Rate / sq inch (₹)", get:()=>2, ro:true, hint:"₹2 fixed in formula" },
+    ]},
+    { title:"Foiling Block — Making", icon:"🔲", color:"#b45309", fields:[
+      { label:"Making Rate / sq inch (₹)", get:()=>foilingBlock.rate, set:v=>setFoilingBlock(p=>({...p,rate:v})) },
+    ]},
+    { title:"Die Block", icon:"⬛", color:"#dc2626", fields:[
+      { label:"Rate per Up (₹)", get:()=>dieBlock.rate, set:v=>setDieBlock(p=>({...p,rate:v})) },
+    ]},
+    { title:"Die Cutting", icon:"✂️", color:"#dc2626", fields:[
+      { label:"Rate / Up / sq inch", get:()=>dieCutting.rate, set:v=>setDieCutting(p=>({...p,rate:v})) },
+    ]},
+    { title:"Pasting", icon:"📦", color:"#64748b", fields:[{ label:"Default Rate (₹)", get:()=>pasting.rate, set:v=>setPasting(p=>({...p,rate:v})) }]},
+    { title:"Packaging", icon:"🎁", color:"#64748b", fields:[{ label:"Default Rate (₹)", get:()=>packaging.rate, set:v=>setPackaging(p=>({...p,rate:v})) }]},
+    { title:"Forwarding / Dispatch", icon:"🚚", color:"#64748b", fields:[{ label:"Default Rate (₹)", get:()=>dispatch.rate, set:v=>setDispatch(p=>({...p,rate:v})) }]},
+  ];
+
+  const copySummary = () => {
+    const lines = summaryItems.map(([k,v])=>`${k.replace(/[^\w ]/g,'').trim()}: ₹${fmt(v)}`).join('\n');
+    const text = `COST ESTIMATE\n${'='.repeat(32)}\n${jobName?'Job: '+jobName+'\n':''}${clientName?'Client: '+clientName+'\n':''}Date: ${jobDate}\n${'='.repeat(32)}\n${lines}\n${'─'.repeat(32)}\nGRAND TOTAL: ₹${fmt(grandTotal)}`;
+    if(navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(()=>alert("✅ Cost summary copied!"));
+    } else {
+      const ta=document.createElement('textarea'); ta.value=text;
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+      alert("✅ Cost summary copied!");
+    }
+  };
+
+  /* ══ RENDER ═════════════════════════════════════════════ */
+  return (
+    <div style={{ minHeight:"100vh", background:T.bgPage }}>
+
+      {/* NAV */}
+      <div className="no-print" style={{ background:T.bgHeader, boxShadow:"0 2px 12px rgba(0,0,0,.18)", position:"sticky", top:0, zIndex:100 }}>
+        <div style={{ maxWidth:1140, margin:"0 auto", padding:"0 20px", display:"flex", alignItems:"center", justifyContent:"space-between", height:58 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+            <div style={{ width:38, height:38, borderRadius:9, background:"rgba(255,255,255,.18)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:20 }}>🖨</div>
+            <div>
+              <div style={{ color:"#fff", fontWeight:800, fontSize:17 }}>PrintCost Pro</div>
+              <div style={{ color:"rgba(255,255,255,.55)", fontSize:10, letterSpacing:1.2 }}>OFFSET PRINTING ESTIMATOR</div>
+            </div>
+          </div>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={()=>setShowGuide(true)} className="btn-primary"
+              style={{ background:"rgba(255,255,255,.13)", border:"1.5px solid rgba(255,255,255,.25)", color:"#fff", padding:"7px 14px", borderRadius:7, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
+              ❓ How to Use
+            </button>
+            <button onClick={()=>setShowSettings(true)} className="btn-primary"
+              style={{ background:"rgba(255,255,255,.13)", border:"1.5px solid rgba(255,255,255,.25)", color:"#fff", padding:"7px 14px", borderRadius:7, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
+              ⚙️ Rate Settings
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* TOAST */}
+      {saveMsg && (
+        <div style={{ position:"fixed", bottom:24, left:"50%", transform:"translateX(-50%)", zIndex:2000,
+          background:"#1e2d50", color:"#fff", padding:"12px 24px", borderRadius:10,
+          fontSize:13, fontWeight:600, boxShadow:"0 8px 24px rgba(0,0,0,.25)" }}>
+          {saveMsg}
+        </div>
+      )}
+
+      {/* MAIN */}
+      <div style={{ maxWidth:1140, margin:"0 auto", padding:"22px 16px 60px" }}>
+
+        {/* FORMULA INFO BANNER */}
+        <div style={{ background:"#eff6ff", border:"1.5px solid #bfdbfe", borderRadius:8, padding:"10px 16px", marginBottom:14, display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
+          <span style={{ fontSize:16 }}>📐</span>
+          <span style={{ fontSize:12, color:"#1e40af" }}>
+            <b>Paper Weight Formula:</b> L × W × GSM × Sheet Qty ÷ ({paperSettings.baseConst} × {paperSettings.reamsBase})
+            &nbsp;|&nbsp; <b>Sheet Qty</b> = total number of sheets (e.g. 5000 sheets directly)
+            &nbsp;|&nbsp; Equivalent units shown automatically
+            &nbsp;—&nbsp; <span style={{ color:"#3b70e8", cursor:"pointer", textDecoration:"underline" }} onClick={()=>setShowSettings(true)}>Change in Settings ⚙️</span>
+          </span>
+          <span style={{ fontSize:11, color:"#16a34a", background:"#f0fdf4", border:"1px solid #bbf7d0", padding:"3px 10px", borderRadius:6, fontWeight:600, whiteSpace:"nowrap" }}>
+            {localStorage.getItem("printcost_plates") ? "💾 Rates loaded from memory" : "⚙️ Set your rates in Settings"}
+          </span>
+        </div>
+
+        {/* JOB INFO */}
+        <div style={{ background:T.bgCard, borderRadius:10, padding:"16px 20px", marginBottom:16, border:`1.5px solid ${T.border}`, boxShadow:T.shadow, display:"flex", gap:14, flexWrap:"wrap", alignItems:"flex-end" }}>
+          <div style={{ flex:2, minWidth:200 }}>
+            <label style={LBL}>Job Name / Description</label>
+            <input placeholder="e.g. Wedding Card — 5000 pcs" value={jobName} onChange={e=>setJobName(e.target.value)}
+              style={{ ...BASE_INP, fontSize:14, fontWeight:600 }} />
+          </div>
+          <div style={{ flex:1, minWidth:150 }}>
+            <label style={LBL}>Client Name</label>
+            <input placeholder="Client / Party name" value={clientName} onChange={e=>setClientName(e.target.value)} style={BASE_INP} />
+          </div>
+          <div style={{ flex:1, minWidth:130 }}>
+            <label style={LBL}>Date</label>
+            <input type="date" value={jobDate} onChange={e=>setJobDate(e.target.value)} style={BASE_INP} />
+          </div>
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 300px", gap:16, alignItems:"start" }}>
+          <div>
+
+            {/* ══ PAPER ══ */}
+            <SectionCard title="Paper Measurement" icon="📄" alwaysOn total={paperCalc.totalPrice}>
+
+              {/* Formula reminder */}
+              <div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:6, padding:"7px 12px", marginBottom:12, fontSize:11, color:"#1e40af" }}>
+                ⚠️ Enter <b>SHEET QTY = total number of sheets</b> (e.g. type 5000 for 5000 sheets).
+                The app will auto-show equivalent packets/reams/gross.
+                &nbsp; Formula: <code style={{ fontFamily:"monospace" }}>L × W × GSM × SheetQty ÷ ({n(paperSettings.baseConst)||3100} × {n(paperSettings.reamsBase)||500})</code>
+              </div>
+
+              <div style={{ overflowX:"auto" }}>
+                {/* Headers */}
+                <div style={{ display:"grid", gridTemplateColumns:"68px 68px 60px 86px 90px 90px 90px 96px 102px 28px", gap:6, minWidth:720, marginBottom:6 }}>
+                  {["Length","Width","GSM","Unit","Sheet Qty","Equiv. Units","Weight Kg","Rate/Kg","Total ₹",""].map((h,i)=>(
+                    <div key={i} style={{ fontSize:9, fontWeight:700, color:T.textDim, textTransform:"uppercase", letterSpacing:.8 }}>{h}</div>
+                  ))}
+                </div>
+                {paperCalc.rows.map((row, idx)=>(
+                  <div key={row.id} className="hover-row" style={{ display:"grid", gridTemplateColumns:"68px 68px 60px 86px 90px 90px 90px 96px 102px 28px", gap:6, minWidth:720, marginBottom:6, alignItems:"center", padding:"3px 2px", borderRadius:6 }}>
+                    {["length","width","gsm"].map(f=>(
+                      <input key={f} type="number" value={row[f]} placeholder="0"
+                        onChange={e=>{const r=[...paperRows];r[idx]={...r[idx],[f]:e.target.value};setPaperRows(r);}}
+                        style={{ ...BASE_INP, padding:"7px 8px", fontSize:12 }} />
+                    ))}
+                    <select value={row.unit} onChange={e=>{const r=[...paperRows];r[idx]={...r[idx],unit:e.target.value};setPaperRows(r);}}
+                      style={{ ...BASE_INP, padding:"7px 8px", fontSize:12, cursor:"pointer" }}>
+                      <option>Packet</option><option>Ream</option><option>Gross</option>
+                    </select>
+                    {/* Sheet Qty — user enters TOTAL SHEETS */}
+                    <input type="number" value={row.sheetQty} placeholder="e.g. 5000"
+                      onChange={e=>{const r=[...paperRows];r[idx]={...r[idx],sheetQty:e.target.value};setPaperRows(r);}}
+                      style={{ ...BASE_INP, padding:"7px 8px", fontSize:12, borderColor: row.sheetQty?"#c5d8f8":"#fbbf24" }} />
+                    {/* Equivalent units — auto calculated, read only */}
+                    <input value={row.sheetQty ? `${row.equivUnits} ${row.unit==="Packet"?"Pkts":row.unit==="Ream"?"Reams":"Gross"}` : "—"}
+                      readOnly style={{ ...BASE_RO, padding:"7px 8px", fontSize:11 }} />
+                    {/* Weight — auto calculated */}
+                    <input value={row.weight ? row.weight.toFixed(4) : "0.0000"} readOnly
+                      style={{ ...BASE_RO, padding:"7px 8px", fontSize:12 }} />
+                    <input type="number" value={row.ratePerKg} placeholder="₹/Kg"
+                      onChange={e=>{const r=[...paperRows];r[idx]={...r[idx],ratePerKg:e.target.value};setPaperRows(r);}}
+                      style={{ ...BASE_INP, padding:"7px 8px", fontSize:12 }} />
+                    <input value={fmt(row.price)} readOnly
+                      style={{ ...BASE_RO, padding:"7px 8px", fontSize:12, color:T.success }} />
+                    <button onClick={()=>setPaperRows(paperRows.filter((_,i)=>i!==idx))}
+                      style={{ width:28, height:32, background:"#fef2f2", border:"1.5px solid #fecaca", color:T.danger, borderRadius:6, cursor:"pointer", fontSize:16, padding:0, fontFamily:"inherit" }}>×</button>
+                  </div>
+                ))}
+              </div>
+
+              <button onClick={()=>setPaperRows([...paperRows,{id:Date.now(),length:"",width:"",gsm:"",unit:"Packet",sheetQty:"",ratePerKg:""}])}
+                style={{ background:T.bgSection, border:`1.5px dashed ${T.primary}`, color:T.primary, padding:"6px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontWeight:600, marginTop:6, fontFamily:"inherit" }}>
+                + Add Paper Row
+              </button>
+
+              <div style={{ height:1, background:"#eef2fb", margin:"12px 0" }} />
+              <div style={{ display:"flex", gap:14, justifyContent:"flex-end", flexWrap:"wrap" }}>
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ fontSize:10, color:T.textDim, fontWeight:700, textTransform:"uppercase", letterSpacing:.8 }}>Total Sheets</div>
+                  <div style={{ fontSize:14, color:T.text, fontWeight:700, fontFamily:"monospace" }}>{paperCalc.totalSheets.toLocaleString("en-IN")}</div>
+                </div>
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ fontSize:10, color:T.textDim, fontWeight:700, textTransform:"uppercase", letterSpacing:.8 }}>Total Weight</div>
+                  <div style={{ fontSize:14, color:T.text, fontWeight:700, fontFamily:"monospace" }}>{paperCalc.totalWeight.toFixed(4)} Kg</div>
+                </div>
+                <div style={{ textAlign:"right", background:T.primaryXl, padding:"4px 14px", borderRadius:8, border:`1px solid ${T.border}` }}>
+                  <div style={{ fontSize:10, color:T.textMid, fontWeight:700, textTransform:"uppercase", letterSpacing:.8 }}>Total Price</div>
+                  <div style={{ fontSize:17, color:T.primary, fontWeight:800, fontFamily:"monospace" }}>₹{fmt(paperCalc.totalPrice)}</div>
+                </div>
+              </div>
+            </SectionCard>
+
+            {/* ══ PLATES ══ */}
+            <SectionCard title="Plates" icon="🖨" enabled={plates.enabled} onToggle={v=>setPlates({...plates,enabled:v})} total={platesTotal}>
+              <Row>
+                <Field label="Normal Plate Rate (₹)" value={plates.normalRate} onChange={v=>setPlates({...plates,normalRate:v})} />
+                <Field label="Normal Plate Qty" value={plates.normalQty} onChange={v=>setPlates({...plates,normalQty:v})} />
+                <Field label="Heating Plate Rate (₹)" value={plates.heatingRate} onChange={v=>setPlates({...plates,heatingRate:v})} />
+                <Field label="Heating Plate Qty" value={plates.heatingQty} onChange={v=>setPlates({...plates,heatingQty:v})} />
+              </Row>
+              <SubRow label="Normal Plates" value={n(plates.normalQty)*n(plates.normalRate)} />
+              <SubRow label="Heating Plates" value={n(plates.heatingQty)*n(plates.heatingRate)} />
+              <SubRow label="Total Plates" value={platesTotal} highlight />
+            </SectionCard>
+
+            {/* ══ PRINTING ══ */}
+            <SectionCard title="Printing" icon="🎨" enabled={printing.enabled} onToggle={v=>setPrinting({...printing,enabled:v})} total={printingCalc.total}>
+
+              {/* Rate Mode toggle */}
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:7, padding:"8px 14px" }}>
+                <span style={{ fontSize:12, fontWeight:700, color:"#1e40af" }}>Rate Mode:</span>
+                {["Per 1000 Sheets","Overall"].map(mode=>(
+                  <button key={mode} onClick={()=>setPrinting({...printing,rateMode:mode})}
+                    style={{ padding:"4px 14px", borderRadius:5, fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
+                      background: printing.rateMode===mode ? "#1a4fd6" : "#fff",
+                      color: printing.rateMode===mode ? "#fff" : "#4a6494",
+                      border: printing.rateMode===mode ? "1.5px solid #1a4fd6" : "1.5px solid #c5d8f8" }}>
+                    {mode}
+                  </button>
+                ))}
+                <span style={{ fontSize:11, color:"#4a6494", marginLeft:4 }}>
+                  {printing.rateMode==="Per 1000 Sheets" ? "→ Rates multiply with sheet quantity" : "→ Rates are fixed flat charges"}
+                </span>
+              </div>
+
+              <Row>
+                <Field label="Type" value={printing.type} onChange={v=>setPrinting({...printing,type:v})} options={["Normal","LED"]} />
+                <Field label="No of Colors" value={printing.numColors} onChange={v=>setPrinting({...printing,numColors:v})} hide={printing.type==="LED"} />
+                <Field label="Paper Qty (sheets)" value={printing.paperQty} onChange={v=>setPrinting({...printing,paperQty:v})} />
+                {/* Pantone now shows for BOTH Normal and LED */}
+                <Field label="Pantone / Special Colors" value={printing.specialColors} onChange={v=>setPrinting({...printing,specialColors:v})} />
+                <Field label={printing.rateMode==="Per 1000 Sheets" ? "Run Charge / 1000" : "Run Charge (Overall)"} value={printing.runCharge} onChange={v=>setPrinting({...printing,runCharge:v})} />
+                <Field label="Ink Charge (₹)" value={printing.inkCharge} onChange={v=>setPrinting({...printing,inkCharge:v})} />
+              </Row>
+
+              {printing.type==="LED"
+                ? <Hint text={`LED: ₹${printing.ledRate}/sheet × ${printing.paperQty||0} sheets${printing.specialColors>0?" + Pantone ₹"+printing.pantoneRate+(printing.rateMode==="Per 1000 Sheets"?"/1000":"")+" × "+printing.specialColors+" colors":""}`} />
+                : <Hint text={printing.rateMode==="Per 1000 Sheets"
+                    ? `Tier rate ÷ 4 × ${printing.numColors} colors × (qty÷1000) | Pantone ₹${printing.pantoneRate}/1000 × colors`
+                    : `Tier rate ÷ 4 × ${printing.numColors} colors (flat) | Pantone ₹${printing.pantoneRate} × colors (flat)`} />
+              }
+              <div style={{ marginTop:8 }}>
+                <SubRow label={printing.type==="LED"?"LED Base (₹"+printing.ledRate+"/sheet)":"Base Printing"} value={printingCalc.baseTotal} />
+                {n(printing.specialColors)>0 && <SubRow label={`Pantone × ${printing.specialColors} color(s) ${printing.rateMode==="Per 1000 Sheets"?"@ ₹"+printing.pantoneRate+"/1000":"@ ₹"+printing.pantoneRate+" flat"}`} value={printingCalc.specialTotal} />}
+                <SubRow label={printing.rateMode==="Per 1000 Sheets"?"Run Charge / 1000":"Run Charge (Overall)"} value={printingCalc.runTotal} />
+                {n(printing.inkCharge)>0 && <SubRow label="Ink Charge" value={n(printing.inkCharge)} />}
+                <SubRow label="Total Printing" value={printingCalc.total} highlight />
+              </div>
+            </SectionCard>
+
+            {/* ══ VARNISH ══ */}
+            <SectionCard title="Varnish" icon="✨" enabled={varnish.enabled} onToggle={v=>setVarnish({...varnish,enabled:v})} total={varnishTotal}>
+              <Row>
+                <Field label="Job Length (in)" value={varnish.length} onChange={v=>setVarnish({...varnish,length:v})} />
+                <Field label="Job Width (in)" value={varnish.width} onChange={v=>setVarnish({...varnish,width:v})} />
+                <Field label="Area (sq in)" value={(n(varnish.length)*n(varnish.width)).toFixed(2)} readOnly />
+                <Field label="Sheet Qty" value={varnish.sheetQty} onChange={v=>setVarnish({...varnish,sheetQty:v})} />
+                <Field label="Total Price" value={fmt(varnishTotal)} readOnly />
+              </Row>
+              <Hint text={`(L × W) ÷ ${varnish.divisor} × ${varnish.paisa} × Sheets`} />
+            </SectionCard>
+
+            {/* ══ UV ══ */}
+            <SectionCard title="UV Coating" icon="💡" enabled={uv.enabled} onToggle={v=>setUV({...uv,enabled:v})} total={uvCalc.total}>
+              <Row>
+                <Field label="UV Type" value={uv.type} onChange={v=>setUV({...uv,type:v})} options={["Full UV","Hybrid UV","Spot UV"]} />
+                <Field label="Job Length (in)" value={uv.length} onChange={v=>setUV({...uv,length:v})} hide={uv.type==="Spot UV"} />
+                <Field label="Job Width (in)" value={uv.width} onChange={v=>setUV({...uv,width:v})} hide={uv.type==="Spot UV"} />
+                <Field label="Area (sq in)" value={(n(uv.length)*n(uv.width)).toFixed(2)} readOnly hide={uv.type==="Spot UV"} />
+                <Field label="Sheet Qty" value={uv.sheetQty} onChange={v=>setUV({...uv,sheetQty:v})} />
+                <Field label="Rate / Sheet (₹)" value={uv.spotPerSheet} onChange={v=>setUV({...uv,spotPerSheet:v})} hide={uv.type!=="Spot UV"} />
+                <Field label="Initial Charge (₹)" value={uv.spotInitial} onChange={v=>setUV({...uv,spotInitial:v})} hide={uv.type!=="Spot UV"} />
+              </Row>
+              {uv.type==="Full UV"   && <Hint text={`(L × W) ÷ ${uv.fullUVDivisor} × ${uv.uvPaisa} × Sheets`} />}
+              {uv.type==="Hybrid UV" && <Hint text={`(L × W) ÷ ${uv.hybridUVDivisor} × ${uv.uvPaisa} × Sheets`} />}
+              {uv.type==="Spot UV"   && <Hint text={`₹${uv.spotPerSheet}/sheet × Qty + ₹${uv.spotInitial} initial`} />}
+              <div style={{ marginTop:8 }}>
+                {uv.type==="Spot UV" && <SubRow label="Initial Charge" value={uvCalc.extra} />}
+                <SubRow label="Total UV" value={uvCalc.total} highlight />
+              </div>
+            </SectionCard>
+
+            {/* ══ LAMINATION ══ */}
+            <SectionCard title="Lamination" icon="🏷" enabled={lamination.enabled} onToggle={v=>setLamination({...lamination,enabled:v})} total={laminationTotal}>
+              <Row>
+                <Field label="Type" value={lamination.type} onChange={v=>setLamination({...lamination,type:v})} options={["Gloss","Matt","Velvet"]} />
+                <Field label="Job Length (in)" value={lamination.length} onChange={v=>setLamination({...lamination,length:v})} hide={lamination.type==="Velvet"} />
+                <Field label="Job Width (in)" value={lamination.width} onChange={v=>setLamination({...lamination,width:v})} hide={lamination.type==="Velvet"} />
+                <Field label="Area (sq in)" value={(n(lamination.length)*n(lamination.width)).toFixed(2)} readOnly hide={lamination.type==="Velvet"} />
+                <Field label="Sheet Qty" value={lamination.sheetQty} onChange={v=>setLamination({...lamination,sheetQty:v})} />
+                <Field label="Rate / Sheet (₹)" value={lamination.velvetRate} onChange={v=>setLamination({...lamination,velvetRate:v})} hide={lamination.type!=="Velvet"} />
+              </Row>
+              {lamination.type==="Gloss"  && <Hint text={`(L × W) ÷ ${lamination.glossDivisor} × ${lamination.glossPaisa} × Sheets`} />}
+              {lamination.type==="Matt"   && <Hint text={`(L × W) ÷ ${lamination.mattDivisor} × ${lamination.mattPaisa} × Sheets`} />}
+              {lamination.type==="Velvet" && <Hint text={`₹${lamination.velvetRate} per sheet`} />}
+              <SubRow label="Total Lamination" value={laminationTotal} highlight />
+            </SectionCard>
+
+            {/* ══ FOILING ══ */}
+            <SectionCard title="Foiling" icon="🌟" enabled={foiling.enabled} onToggle={v=>setFoiling({...foiling,enabled:v})} total={foilingTotal}>
+              <Row>
+                <Field label="Length (in)" value={foiling.length} onChange={v=>setFoiling({...foiling,length:v})} />
+                <Field label="Width (in)" value={foiling.width} onChange={v=>setFoiling({...foiling,width:v})} />
+                <Field label="Area (sq in)" value={(n(foiling.length)*n(foiling.width)).toFixed(2)} readOnly />
+                <Field label="No of Blocks" value={foiling.numBlocks} onChange={v=>setFoiling({...foiling,numBlocks:v})} />
+                <Field label="No of Sheets" value={foiling.numSheets} onChange={v=>setFoiling({...foiling,numSheets:v})} />
+                <Field label="Total Price" value={fmt(foilingTotal)} readOnly />
+              </Row>
+              <Hint text="L × W × ₹2 × No. of Blocks × No. of Sheets" />
+            </SectionCard>
+
+            {/* ══ FOILING BLOCK ══ */}
+            <SectionCard title="Foiling Block (Making Charge)" icon="🔲" enabled={foilingBlock.enabled} onToggle={v=>setFoilingBlock({...foilingBlock,enabled:v})} total={foilingBTotal}>
+              <Row>
+                <Field label="Length (in)" value={foilingBlock.length} onChange={v=>setFoilingBlock({...foilingBlock,length:v})} />
+                <Field label="Width (in)" value={foilingBlock.width} onChange={v=>setFoilingBlock({...foilingBlock,width:v})} />
+                <Field label="Area (sq in)" value={(n(foilingBlock.length)*n(foilingBlock.width)).toFixed(2)} readOnly />
+                <Field label="Making Rate / sq in (₹)" value={foilingBlock.rate} onChange={v=>setFoilingBlock({...foilingBlock,rate:v})} />
+                <Field label="Total Price" value={fmt(foilingBTotal)} readOnly />
+              </Row>
+              <Hint text="L × W × Rate" />
+            </SectionCard>
+
+            {/* ══ DIE BLOCK ══ */}
+            <SectionCard title="Die Block" icon="⬛" enabled={dieBlock.enabled} onToggle={v=>setDieBlock({...dieBlock,enabled:v})} total={dieBlockTotal}>
+              <Row>
+                <Field label="No of Ups" value={dieBlock.numUps} onChange={v=>setDieBlock({...dieBlock,numUps:v})} />
+                <Field label="Rate per Up (₹)" value={dieBlock.rate} onChange={v=>setDieBlock({...dieBlock,rate:v})} />
+                <Field label="Total Price" value={fmt(dieBlockTotal)} readOnly />
+                <div style={{ flex:2 }} />
+              </Row>
+              <Hint text="No. of Ups × Rate" />
+            </SectionCard>
+
+            {/* ══ DIE CUTTING ══ */}
+            <SectionCard title="Die Cutting" icon="✂️" enabled={dieCutting.enabled} onToggle={v=>setDieCutting({...dieCutting,enabled:v})} total={dieCutTotal}>
+              <Row>
+                <Field label="Length (in)" value={dieCutting.length} onChange={v=>setDieCutting({...dieCutting,length:v})} />
+                <Field label="Width (in)" value={dieCutting.width} onChange={v=>setDieCutting({...dieCutting,width:v})} />
+                <Field label="Area (sq in)" value={(n(dieCutting.length)*n(dieCutting.width)).toFixed(2)} readOnly />
+                <Field label="No of Ups" value={dieCutting.numUps} onChange={v=>setDieCutting({...dieCutting,numUps:v})} />
+                <Field label="Rate / Up" value={dieCutting.rate} onChange={v=>setDieCutting({...dieCutting,rate:v})} />
+                <Field label="Total Price" value={fmt(dieCutTotal)} readOnly />
+              </Row>
+              <Hint text="L × W × No. of Ups × Rate" />
+            </SectionCard>
+
+            {/* ══ PASTING ══ */}
+            <SectionCard title="Pasting" icon="📦" enabled={pasting.enabled} onToggle={v=>setPasting({...pasting,enabled:v})} total={pastingTotal}>
+              <Row>
+                <Field label="Quantity" value={pasting.qty} onChange={v=>setPasting({...pasting,qty:v})} />
+                <Field label="Rate (₹)" value={pasting.rate} onChange={v=>setPasting({...pasting,rate:v})} />
+                <Field label="Total Price" value={fmt(pastingTotal)} readOnly />
+                <div style={{ flex:3 }} />
+              </Row>
+            </SectionCard>
+
+            {/* ══ PACKAGING ══ */}
+            <SectionCard title="Packaging" icon="🎁" enabled={packaging.enabled} onToggle={v=>setPackaging({...packaging,enabled:v})} total={packagingTotal}>
+              <Row>
+                <Field label="Quantity" value={packaging.qty} onChange={v=>setPackaging({...packaging,qty:v})} />
+                <Field label="Rate (₹)" value={packaging.rate} onChange={v=>setPackaging({...packaging,rate:v})} />
+                <Field label="Total Price" value={fmt(packagingTotal)} readOnly />
+                <div style={{ flex:3 }} />
+              </Row>
+            </SectionCard>
+
+            {/* ══ DISPATCH ══ */}
+            <SectionCard title="Forwarding / Dispatch" icon="🚚" enabled={dispatch.enabled} onToggle={v=>setDispatch({...dispatch,enabled:v})} total={dispatchTotal}>
+              <Row>
+                <Field label="Quantity" value={dispatch.qty} onChange={v=>setDispatch({...dispatch,qty:v})} />
+                <Field label="Rate (₹)" value={dispatch.rate} onChange={v=>setDispatch({...dispatch,rate:v})} />
+                <Field label="Total Price" value={fmt(dispatchTotal)} readOnly />
+                <div style={{ flex:3 }} />
+              </Row>
+            </SectionCard>
+
+          </div>{/* end left col */}
+
+          {/* RIGHT — STICKY SUMMARY */}
+          <div className="no-print" style={{ position:"sticky", top:74 }}>
+            <div style={{ background:T.bgCard, borderRadius:12, border:`1.5px solid ${T.border}`, boxShadow:T.shadowMd, overflow:"hidden" }}>
+              <div style={{ background:T.bgHeader, padding:"14px 18px" }}>
+                <div style={{ color:"rgba(255,255,255,.65)", fontSize:10, fontWeight:700, textTransform:"uppercase", letterSpacing:1.5, marginBottom:2 }}>Cost Summary</div>
+                {jobName   && <div style={{ color:"#fff", fontSize:13, fontWeight:700 }}>{jobName}</div>}
+                {clientName && <div style={{ color:"rgba(255,255,255,.7)", fontSize:12, marginTop:2 }}>{clientName}</div>}
+                {jobDate   && <div style={{ color:"rgba(255,255,255,.5)", fontSize:11, marginTop:2 }}>{jobDate}</div>}
+              </div>
+              <div style={{ padding:"12px 16px" }}>
+                {summaryItems.length===0
+                  ? <div style={{ color:T.textDim, fontSize:12, textAlign:"center", padding:"18px 0" }}>Enable sections to see breakdown</div>
+                  : summaryItems.map(([name,val])=>(
+                    <div key={name} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 0", borderBottom:`1px solid ${T.bgSection}` }}>
+                      <span style={{ color:T.textMid, fontSize:12 }}>{name}</span>
+                      <span style={{ color:T.text, fontFamily:"monospace", fontSize:13, fontWeight:600 }}>₹{fmt(val)}</span>
+                    </div>
+                  ))
+                }
+              </div>
+              <div style={{ background:T.bgSection, margin:"0 12px 12px", borderRadius:8, padding:"14px 16px", border:`1.5px solid ${T.border}` }}>
+                <div style={{ color:T.textMid, fontSize:10, fontWeight:700, textTransform:"uppercase", letterSpacing:1.5, marginBottom:4 }}>Grand Total</div>
+                <div style={{ color:T.primary, fontFamily:"monospace", fontSize:28, fontWeight:800 }}>₹{fmt(grandTotal)}</div>
+              </div>
+              <div style={{ padding:"0 12px 14px", display:"flex", flexDirection:"column", gap:8 }}>
+                <button onClick={()=>window.print()} className="btn-primary"
+                  style={{ width:"100%", background:T.primary, color:"#fff", border:"none", padding:10, borderRadius:7, fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
+                  🖨 Print / Save PDF
+                </button>
+                <button onClick={copySummary}
+                  style={{ width:"100%", background:T.bgSection, color:T.primary, border:`1.5px solid ${T.border}`, padding:9, borderRadius:7, fontSize:13, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
+                  📋 Copy Summary
+                </button>
+              </div>
+            </div>
+          </div>
+
+        </div>{/* end grid */}
+      </div>{/* end main */}
+
+      {/* ══ SETTINGS MODAL ══ */}
+      {showSettings && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(15,30,70,.5)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
+          <div style={{ background:T.bgCard, borderRadius:14, width:660, maxHeight:"88vh", overflow:"hidden", display:"flex", flexDirection:"column", boxShadow:"0 20px 60px rgba(15,30,70,.3)", border:`1.5px solid ${T.border}` }}>
+            <div style={{ background:T.bgHeader, padding:"16px 22px", display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0 }}>
+              <div>
+                <div style={{ color:"#fff", fontWeight:800, fontSize:15 }}>⚙️ Rate & Formula Settings</div>
+                <div style={{ color:"rgba(255,255,255,.6)", fontSize:11, marginTop:1 }}>Set default rates for all sections — including Paper formula constants</div>
+              </div>
+              <button onClick={()=>setShowSettings(false)} style={{ background:"rgba(255,255,255,.15)", border:"none", color:"#fff", width:30, height:30, borderRadius:6, fontSize:18, cursor:"pointer", fontFamily:"inherit" }}>×</button>
+            </div>
+            <div style={{ overflowY:"auto", padding:"16px 22px 20px", flex:1 }}>
+              {settingGroups.map(group=>(
+                <div key={group.title} style={{ marginBottom:10, borderRadius:8, border:`1.5px solid ${T.border}`, overflow:"hidden" }}>
+                  <div style={{ background:T.bgSection, padding:"9px 14px", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:8 }}>
+                    <span>{group.icon}</span>
+                    <span style={{ fontSize:12, fontWeight:700, color:group.color, textTransform:"uppercase", letterSpacing:.8 }}>{group.title}</span>
+                  </div>
+                  <div style={{ padding:"12px 14px", display:"flex", gap:10, flexWrap:"wrap" }}>
+                    {group.fields.map(f=>(
+                      <div key={f.label} style={{ flex:1, minWidth:170 }}>
+                        <label style={slbl}>{f.label}</label>
+                        <input type="number" value={f.get()} readOnly={!!f.ro}
+                          onChange={e=>!f.ro&&f.set&&f.set(e.target.value)}
+                          style={f.ro ? sro : sinp} />
+                        {f.hint && <div style={{ color:T.textDim, fontSize:10, marginTop:3 }}>{f.hint}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ padding:"14px 22px", borderTop:`1px solid ${T.border}`, background:T.bgSub, flexShrink:0 }}>
+              <div style={{ display:"flex", gap:8, marginBottom:8 }}>
+                <button onClick={handleSaveSettings} className="btn-primary"
+                  style={{ flex:3, background:T.primary, color:"#fff", border:"none", padding:12, borderRadius:8, fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
+                  💾 Save & Apply Rates
+                </button>
+                <button onClick={handleResetRates}
+                  style={{ flex:1, background:"#fef2f2", color:"#dc2626", border:"1.5px solid #fecaca", padding:12, borderRadius:8, fontSize:13, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
+                  ♻️ Reset
+                </button>
+              </div>
+              <div style={{ fontSize:11, color:"#4a6494", textAlign:"center" }}>
+                💡 Rates are saved in your browser — auto-loaded next time you open this file
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══ HOW TO USE MODAL ══ */}
+      {showGuide && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(15,30,70,.5)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
+          <div style={{ background:T.bgCard, borderRadius:14, width:520, maxHeight:"85vh", overflow:"hidden", display:"flex", flexDirection:"column", boxShadow:"0 20px 60px rgba(15,30,70,.3)", border:`1.5px solid ${T.border}` }}>
+            <div style={{ background:T.bgHeader, padding:"16px 22px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <div style={{ color:"#fff", fontWeight:800, fontSize:15 }}>❓ How to Use</div>
+              <button onClick={()=>setShowGuide(false)} style={{ background:"rgba(255,255,255,.15)", border:"none", color:"#fff", width:30, height:30, borderRadius:6, fontSize:18, cursor:"pointer", fontFamily:"inherit" }}>×</button>
+            </div>
+            <div style={{ overflowY:"auto", padding:"20px 24px" }}>
+              {[
+                ["1️⃣","Fill Job Info","Enter job name, client name and date at the top."],
+                ["2️⃣","Paper — Enter SHEET QTY","In the paper table, enter total number of sheets directly (e.g. 5000). The app will auto-show equivalent packets/reams. Weight is auto-calculated."],
+                ["3️⃣","Paper Formula","Weight = L × W × GSM × SheetQty ÷ (3100 × 500). You can change the 3100 and 500 constants in ⚙️ Settings if your press uses different standards."],
+                ["4️⃣","Toggle sections ON/OFF","Use the blue toggle on each section header to enable only what's needed for this job."],
+                ["5️⃣","Smart field hiding","Fields auto-hide when not needed — e.g. color count hides for LED, area hides for Velvet lamination, Spot UV shows its own fields."],
+                ["6️⃣","Blue = auto calculated","All blue fields are auto-calculated. You don't enter them."],
+                ["7️⃣","Set default rates once","Click ⚙️ Rate Settings in the top bar to set all standard rates including paper formula constants."],
+                ["8️⃣","Print or Share","Click 🖨 Print / Save PDF for a printable estimate, or 📋 Copy Summary to paste in WhatsApp."],
+              ].map(([num,title,desc])=>(
+                <div key={title} style={{ display:"flex", gap:14, marginBottom:18, alignItems:"flex-start" }}>
+                  <span style={{ fontSize:22, flexShrink:0 }}>{num}</span>
+                  <div>
+                    <div style={{ fontWeight:700, color:T.text, fontSize:13, marginBottom:3 }}>{title}</div>
+                    <div style={{ color:T.textMid, fontSize:12, lineHeight:1.6 }}>{desc}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ padding:"14px 22px", borderTop:`1px solid ${T.border}`, background:T.bgSub }}>
+              <button onClick={()=>setShowGuide(false)} className="btn-primary"
+                style={{ width:"100%", background:T.primary, color:"#fff", border:"none", padding:12, borderRadius:8, fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
+                Got it! Let's Start ✓
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
