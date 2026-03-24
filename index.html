@@ -14,7 +14,7 @@
   input[type=number]::-webkit-outer-spin-button,
   input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
   input[type=number] { -moz-appearance: textfield; }
-  input:focus, select:focus { border-color: #1a4fd6 !important; box-shadow: 0 0 0 3px rgba(26,79,214,.12) !important; outline: none; }
+  input:focus, select:focus, textarea:focus { border-color: #1a4fd6 !important; box-shadow: 0 0 0 3px rgba(26,79,214,.12) !important; outline: none; }
   select option { background: #fff; color: #1e2d50; }
   ::-webkit-scrollbar { width: 5px; }
   ::-webkit-scrollbar-thumb { background: #c5d8f8; border-radius: 4px; }
@@ -22,10 +22,23 @@
   .toggle-knob { width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: transform .2s; }
   .btn-primary:hover { filter: brightness(1.08); }
   .hover-row:hover { background: #f5f8ff !important; }
+
+  /* QUOTE PRINT STYLES */
   @media print {
     .no-print { display: none !important; }
+    .print-only { display: block !important; }
     body { background: #fff; }
+    .quote-modal-inner { box-shadow: none !important; border: none !important; }
   }
+  .print-only { display: none; }
+
+  /* Quote page styles */
+  @page { margin: 16mm 18mm; size: A4; }
+  .quote-table { width:100%; border-collapse:collapse; }
+  .quote-table th, .quote-table td { padding:9px 12px; text-align:left; border-bottom:1px solid #e8f0fe; font-size:13px; }
+  .quote-table th { background:#e8f0fe; color:#1a4fd6; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.8px; }
+  .quote-table tr:last-child td { border-bottom:none; }
+  .quote-table tr:nth-child(even) td { background:#f8faff; }
 </style>
 </head>
 <body>
@@ -44,6 +57,8 @@ const T = {
 
 const n = v => parseFloat(v) || 0;
 const fmt = v => Number(v||0).toLocaleString("en-IN", {minimumFractionDigits:2, maximumFractionDigits:2});
+const fmtInt = v => Number(v||0).toLocaleString("en-IN");
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
 
 const BASE_INP = { width:"100%", padding:"8px 10px", borderRadius:6, border:"1.5px solid #c5d8f8", fontSize:13, color:"#1e2d50", background:"#ffffff", outline:"none", fontFamily:"inherit" };
 const BASE_RO  = { ...BASE_INP, background:"#eef4ff", color:"#1a4fd6", fontWeight:700, cursor:"default" };
@@ -149,104 +164,117 @@ function ModeBtn({ label, active, onClick }) {
   );
 }
 
-/* ════════════════ DEFAULTS ════════════════ */
+/* ════════════ DEFAULTS ════════════ */
 const DEFAULTS = {
   paperSettings: { baseConst:3100, reamsBase:500 },
   plates:        { enabled:false, normalRate:250, normalQty:"", heatingRate:320, heatingQty:"" },
   printing:      { enabled:false, type:"Normal", numColors:4, paperQty:"", specialColors:0, runCharge:500, inkCharge:0, rateMode:"Per 1000 Sheets", tier1000:1200, tier5000:1000, tier10000:900, tierAbove:800, ledRate:3, pantoneRate:300 },
   varnish:       { enabled:false, length:"",width:"",sheetQty:"", divisor:4, paisa:0.01 },
-  uv:            { enabled:false, type:"Full UV", length:"",width:"",sheetQty:"", spotPerSheet:100, spotInitial:1000, fullUVDivisor:4, hybridUVDivisor:2.5, uvPaisa:0.01 },
-  lamination:    { enabled:false, type:"Gloss", length:"",width:"",sheetQty:"", velvetRate:8.28, glossDivisor:3, glossPaisa:0.01, mattDivisor:1.5, mattPaisa:0.01 },
+  uv:            { enabled:false, type:"Full UV", length:"",width:"",sheetQty:"", spotPerSheet:100, spotInitial:1000, fullUVDivisor:4, hybridUVDivisor:2.5, uvPaisa:0.01, perSheetRate:5 },
+  lamination:    { enabled:false, type:"Gloss", length:"",width:"",sheetQty:"", velvetRate:8.28, glossDivisor:3, glossPaisa:0.01, mattDivisor:1.5, mattPaisa:0.01, perSheetRate:6 },
   foilingBlock:  { enabled:false, length:"",width:"", rate:1 },
-  // ── UPDATED DEFAULTS ──
-  dieBlock:      { enabled:false, numBlocks:1, rate:500 },
+  dieBlock:      { enabled:false, rateMode:"Rate per Block", numBlocks:1, rate:500, length:"", width:"", fixedPrice:"" },
   dieCutting:    { enabled:false, rateMode:"Per 1000 Sheets", sheetQty:"", rate:300, fixedCharge:"" },
   pasting:       { enabled:false, lockQty:"", lockRate:250, sideQty:"", sideRate:100 },
   packaging:     { enabled:false, mode:"Per Carton", numCartons:"", ratePerCarton:60, fixedPrice:"" },
   dispatch:      { enabled:false, fixedRate:600 },
   extraCharge:   { enabled:false, description:"", amount:"" },
+  companyInfo:   { name:"", tagline:"Offset Printing", address:"", phone:"", email:"", gstin:"", terms:"" },
 };
 
 function loadSaved(key) {
   try {
     const saved = localStorage.getItem("printcost_"+key);
-    if(saved) return {...DEFAULTS[key], ...JSON.parse(saved)};
+    if(saved) {
+      const parsed = JSON.parse(saved);
+      if(DEFAULTS[key] && !Array.isArray(DEFAULTS[key])) return { ...DEFAULTS[key], ...parsed };
+      return parsed;
+    }
   } catch(e) {}
-  return DEFAULTS[key];
+  return DEFAULTS[key] || (key.startsWith("custom") ? [] : null);
 }
 
 function saveAllRates(data) {
-  try {
-    Object.entries(data).forEach(([key, val]) => {
-      localStorage.setItem("printcost_"+key, JSON.stringify(val));
-    });
-    return true;
-  } catch(e) { return false; }
+  try { Object.entries(data).forEach(([k,v]) => localStorage.setItem("printcost_"+k, JSON.stringify(v))); return true; }
+  catch(e) { return false; }
 }
 
-/* ════════════════ APP ════════════════ */
+/* ════════════ APP ════════════ */
 function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showGuide, setShowGuide]       = useState(false);
+  const [showQuote, setShowQuote]       = useState(false);
   const [saveMsg, setSaveMsg]           = useState("");
+  const [settingsTab, setSettingsTab]   = useState("rates");
   const [jobName, setJobName]           = useState("");
   const [clientName, setClientName]     = useState("");
   const [jobDate, setJobDate]           = useState(new Date().toISOString().split("T")[0]);
+  const [quoteNotes, setQuoteNotes]     = useState("");
+  const [quoteNo, setQuoteNo]           = useState("QT-" + new Date().getFullYear() + "-" + String(Math.floor(Math.random()*9000)+1000));
 
   const [paperSettings, setPaperSettings] = useState(loadSaved("paperSettings"));
+  const [companyInfo, setCompanyInfo]     = useState(loadSaved("companyInfo") || DEFAULTS.companyInfo);
   const [paperRows, setPaperRows] = useState([
     { id:1, length:"", width:"", gsm:"", unit:"Packet", sheetQty:"", ratePerKg:"" }
   ]);
 
-  const [plates,setPlates]             = useState(loadSaved("plates"));
-  const [printing,setPrinting]         = useState(loadSaved("printing"));
-  const [varnish,setVarnish]           = useState(loadSaved("varnish"));
-  const [uv,setUV]                     = useState(loadSaved("uv"));
-  const [lamination,setLamination]     = useState(loadSaved("lamination"));
-  const [foiling,setFoiling]           = useState({ enabled:false, length:"",width:"", numBlocks:1, numSheets:"" });
+  // Custom type states (arrays)
+  const [customUVTypes, setCustomUVTypes]   = useState(() => { try { return JSON.parse(localStorage.getItem("printcost_customUVTypes")||"[]"); } catch(e){ return []; }});
+  const [customLamTypes, setCustomLamTypes] = useState(() => { try { return JSON.parse(localStorage.getItem("printcost_customLamTypes")||"[]"); } catch(e){ return []; }});
+  const [customFoilTypes, setCustomFoilTypes] = useState(() => { try { return JSON.parse(localStorage.getItem("printcost_customFoilTypes")||"[]"); } catch(e){ return []; }});
+  // Temp new type inputs
+  const [newUVType, setNewUVType]     = useState({ name:"", ratePerSheet:5 });
+  const [newLamType, setNewLamType]   = useState({ name:"", ratePerSheet:8 });
+  const [newFoilType, setNewFoilType] = useState({ name:"", ratePerSheet:3 });
+
+  const [plates,setPlates]         = useState(loadSaved("plates"));
+  const [printing,setPrinting]     = useState(loadSaved("printing"));
+  const [varnish,setVarnish]       = useState(loadSaved("varnish"));
+  const [uv,setUV]                 = useState(loadSaved("uv"));
+  const [lamination,setLamination] = useState(loadSaved("lamination"));
+
+  // Foiling uses local state (not in DEFAULTS originally) — keep consistent
+  const [foiling,setFoiling]       = useState({ enabled:false, mode:"Area Based", length:"",width:"", numBlocks:1, numSheets:"", areaRate:2, perSheetRate:2 });
   const [foilingBlock,setFoilingBlock] = useState(loadSaved("foilingBlock"));
-  // ── UPDATED STATES ──
-  const [dieBlock,setDieBlock]         = useState(loadSaved("dieBlock"));
-  const [dieCutting,setDieCutting]     = useState(loadSaved("dieCutting"));
-  const [pasting,setPasting]           = useState(loadSaved("pasting"));
-  const [packaging,setPackaging]       = useState(loadSaved("packaging"));
-  const [dispatch,setDispatch]         = useState(loadSaved("dispatch"));
-  const [extraCharge,setExtraCharge]   = useState(loadSaved("extraCharge"));
+  const [dieBlock,setDieBlock]     = useState(loadSaved("dieBlock") || DEFAULTS.dieBlock);
+  const [dieCutting,setDieCutting] = useState(loadSaved("dieCutting"));
+  const [pasting,setPasting]       = useState(loadSaved("pasting"));
+  const [packaging,setPackaging]   = useState(loadSaved("packaging"));
+  const [dispatch,setDispatch]     = useState(loadSaved("dispatch"));
+  const [extraCharge,setExtraCharge] = useState(loadSaved("extraCharge"));
+
+  // All UV types (built-in + custom)
+  const allUVTypes    = ["Full UV","Hybrid UV","Spot UV","Per Sheet", ...customUVTypes.map(t=>t.name)];
+  const allLamTypes   = ["Gloss","Matt","Velvet","Per Sheet", ...customLamTypes.map(t=>t.name)];
 
   const handleSaveSettings = () => {
     const ok = saveAllRates({
-      paperSettings, plates, printing, varnish, uv, lamination,
-      foilingBlock, dieBlock, dieCutting, pasting, packaging, dispatch, extraCharge
+      paperSettings, companyInfo, plates, printing, varnish, uv, lamination,
+      foilingBlock, dieBlock, dieCutting, pasting, packaging, dispatch, extraCharge,
+      customUVTypes, customLamTypes, customFoilTypes
     });
-    setSaveMsg(ok ? "✅ Rates saved! Will auto-load next time." : "⚠️ Could not save.");
+    setSaveMsg(ok ? "✅ Rates & settings saved!" : "⚠️ Could not save.");
     setTimeout(()=>setSaveMsg(""), 3000);
     setShowSettings(false);
   };
 
   const handleResetRates = () => {
     if(!confirm("Reset all rates to factory defaults?")) return;
-    Object.keys(DEFAULTS).forEach(k => localStorage.removeItem("printcost_"+k));
-    setPaperSettings(DEFAULTS.paperSettings);
-    setPlates(DEFAULTS.plates);
-    setPrinting(DEFAULTS.printing);
-    setVarnish(DEFAULTS.varnish);
-    setUV(DEFAULTS.uv);
-    setLamination(DEFAULTS.lamination);
-    setFoilingBlock(DEFAULTS.foilingBlock);
-    setDieBlock(DEFAULTS.dieBlock);
-    setDieCutting(DEFAULTS.dieCutting);
-    setPasting(DEFAULTS.pasting);
-    setPackaging(DEFAULTS.packaging);
-    setDispatch(DEFAULTS.dispatch);
+    ["paperSettings","companyInfo","plates","printing","varnish","uv","lamination","foilingBlock","dieBlock","dieCutting","pasting","packaging","dispatch","extraCharge","customUVTypes","customLamTypes","customFoilTypes"].forEach(k => localStorage.removeItem("printcost_"+k));
+    setPaperSettings(DEFAULTS.paperSettings); setCompanyInfo(DEFAULTS.companyInfo);
+    setPlates(DEFAULTS.plates); setPrinting(DEFAULTS.printing); setVarnish(DEFAULTS.varnish);
+    setUV(DEFAULTS.uv); setLamination(DEFAULTS.lamination);
+    setFoilingBlock(DEFAULTS.foilingBlock); setDieBlock(DEFAULTS.dieBlock);
+    setDieCutting(DEFAULTS.dieCutting); setPasting(DEFAULTS.pasting);
+    setPackaging(DEFAULTS.packaging); setDispatch(DEFAULTS.dispatch);
     setExtraCharge(DEFAULTS.extraCharge);
-    setSaveMsg("♻️ Rates reset to defaults.");
-    setTimeout(()=>setSaveMsg(""), 3000);
+    setCustomUVTypes([]); setCustomLamTypes([]); setCustomFoilTypes([]);
+    setSaveMsg("♻️ Reset to defaults."); setTimeout(()=>setSaveMsg(""), 3000);
   };
 
   /* ══ CALCULATIONS ══ */
   const paperCalc = useMemo(() => {
-    const bc = n(paperSettings.baseConst) || 3100;
-    const rb = n(paperSettings.reamsBase) || 500;
+    const bc = n(paperSettings.baseConst)||3100, rb = n(paperSettings.reamsBase)||500;
     let ts=0, tw=0, tp=0;
     const rows = paperRows.map(row => {
       const L=n(row.length), W=n(row.width), GSM=n(row.gsm);
@@ -280,59 +308,71 @@ function App() {
     return {total:base+special+run+ink,baseTotal:base,specialTotal:special,runTotal:run};
   }, [printing]);
 
-  const varnishTotal    = useMemo(()=>!varnish.enabled?0:n(varnish.length)*n(varnish.width)/(n(varnish.divisor)||4)*(n(varnish.paisa)||0.01)*n(varnish.sheetQty),[varnish]);
+  const varnishTotal = useMemo(()=>!varnish.enabled?0:n(varnish.length)*n(varnish.width)/(n(varnish.divisor)||4)*(n(varnish.paisa)||0.01)*n(varnish.sheetQty),[varnish]);
 
   const uvCalc = useMemo(()=>{
     if(!uv.enabled) return {total:0,extra:0,base:0};
     const area=n(uv.length)*n(uv.width), sheets=n(uv.sheetQty);
-    let base=0,extra=0;
+    const customType = customUVTypes.find(t=>t.name===uv.type);
+    let base=0, extra=0;
     if(uv.type==="Full UV")    base=area/(n(uv.fullUVDivisor)||4)*(n(uv.uvPaisa)||0.01)*sheets;
     else if(uv.type==="Hybrid UV") base=area/(n(uv.hybridUVDivisor)||2.5)*(n(uv.uvPaisa)||0.01)*sheets;
-    else {base=n(uv.spotPerSheet)*sheets; extra=n(uv.spotInitial);}
+    else if(uv.type==="Spot UV")  { base=n(uv.spotPerSheet)*sheets; extra=n(uv.spotInitial); }
+    else if(uv.type==="Per Sheet") base=n(uv.perSheetRate)*sheets;
+    else if(customType) base=n(customType.ratePerSheet)*sheets;
     return {total:base+extra,base,extra};
-  },[uv]);
+  },[uv, customUVTypes]);
 
   const laminationTotal = useMemo(()=>{
     if(!lamination.enabled) return 0;
     const area=n(lamination.length)*n(lamination.width), sheets=n(lamination.sheetQty);
-    if(lamination.type==="Gloss") return area/(n(lamination.glossDivisor)||3)*(n(lamination.glossPaisa)||0.01)*sheets;
-    if(lamination.type==="Matt")  return area/(n(lamination.mattDivisor)||1.5)*(n(lamination.mattPaisa)||0.01)*sheets;
-    return (n(lamination.velvetRate)||8.28)*sheets;
-  },[lamination]);
+    const customType = customLamTypes.find(t=>t.name===lamination.type);
+    if(lamination.type==="Gloss")      return area/(n(lamination.glossDivisor)||3)*(n(lamination.glossPaisa)||0.01)*sheets;
+    if(lamination.type==="Matt")       return area/(n(lamination.mattDivisor)||1.5)*(n(lamination.mattPaisa)||0.01)*sheets;
+    if(lamination.type==="Velvet")     return (n(lamination.velvetRate)||8.28)*sheets;
+    if(lamination.type==="Per Sheet")  return n(lamination.perSheetRate)*sheets;
+    if(customType) return n(customType.ratePerSheet)*sheets;
+    return 0;
+  },[lamination, customLamTypes]);
 
-  const foilingTotal   = useMemo(()=>!foiling.enabled?0:n(foiling.length)*n(foiling.width)*2*n(foiling.numBlocks)*n(foiling.numSheets),[foiling]);
-  const foilingBTotal  = useMemo(()=>!foilingBlock.enabled?0:n(foilingBlock.length)*n(foilingBlock.width)*n(foilingBlock.rate),[foilingBlock]);
+  const foilingTotal = useMemo(()=>{
+    if(!foiling.enabled) return 0;
+    const sheets=n(foiling.numSheets);
+    const customType = customFoilTypes.find(t=>t.name===foiling.mode);
+    if(foiling.mode==="Area Based") return n(foiling.length)*n(foiling.width)*(n(foiling.areaRate)||2)*n(foiling.numBlocks)*sheets;
+    if(foiling.mode==="Per Sheet")  return n(foiling.perSheetRate)*sheets;
+    if(customType) return n(customType.ratePerSheet)*sheets;
+    return 0;
+  },[foiling, customFoilTypes]);
 
-  /* ── UPDATED CALCS ── */
-  // Die Block: No of Blocks × Rate
-  const dieBlockTotal = useMemo(()=>!dieBlock.enabled?0:n(dieBlock.numBlocks)*n(dieBlock.rate),[dieBlock]);
+  const foilingBTotal = useMemo(()=>!foilingBlock.enabled?0:n(foilingBlock.length)*n(foilingBlock.width)*n(foilingBlock.rate),[foilingBlock]);
 
-  // Die Cutting: Per 1000 Sheets OR Fixed
+  const dieBlockTotal = useMemo(()=>{
+    if(!dieBlock.enabled) return 0;
+    if(dieBlock.rateMode==="Rate per Block")    return n(dieBlock.numBlocks)*n(dieBlock.rate);
+    if(dieBlock.rateMode==="Rate per sq inch")  return n(dieBlock.length)*n(dieBlock.width)*n(dieBlock.rate);
+    return n(dieBlock.fixedPrice);
+  },[dieBlock]);
+
   const dieCutTotal = useMemo(()=>{
     if(!dieCutting.enabled) return 0;
     if(dieCutting.rateMode==="Per 1000 Sheets") return n(dieCutting.rate)*n(dieCutting.sheetQty)/1000;
     return n(dieCutting.fixedCharge);
   },[dieCutting]);
 
-  // Pasting: Lock + Side (both per 1000)
   const pastingCalc = useMemo(()=>{
     if(!pasting.enabled) return {lock:0, side:0, total:0};
-    const lock = n(pasting.lockQty) * n(pasting.lockRate) / 1000;
-    const side = n(pasting.sideQty) * n(pasting.sideRate) / 1000;
-    return {lock, side, total: lock+side};
+    const lock=n(pasting.lockQty)*n(pasting.lockRate)/1000, side=n(pasting.sideQty)*n(pasting.sideRate)/1000;
+    return {lock, side, total:lock+side};
   },[pasting]);
 
-  // Packaging: Per Carton OR Fixed
   const packagingTotal = useMemo(()=>{
     if(!packaging.enabled) return 0;
     if(packaging.mode==="Per Carton") return n(packaging.numCartons)*n(packaging.ratePerCarton);
     return n(packaging.fixedPrice);
   },[packaging]);
 
-  // Dispatch: Fixed Rate
-  const dispatchTotal = useMemo(()=>!dispatch.enabled?0:n(dispatch.fixedRate),[dispatch]);
-
-  // Extra Charge
+  const dispatchTotal    = useMemo(()=>!dispatch.enabled?0:n(dispatch.fixedRate),[dispatch]);
   const extraChargeTotal = useMemo(()=>!extraCharge.enabled?0:n(extraCharge.amount),[extraCharge]);
 
   const grandTotal = paperCalc.totalPrice+platesTotal+printingCalc.total+varnishTotal+uvCalc.total+laminationTotal+foilingTotal+foilingBTotal+dieBlockTotal+dieCutTotal+pastingCalc.total+packagingTotal+dispatchTotal+extraChargeTotal;
@@ -354,20 +394,43 @@ function App() {
     ["➕ Extra Charge", extraChargeTotal, extraCharge.enabled],
   ].filter(([,,en])=>en);
 
-  /* ══ SETTINGS GROUPS ══ */
-  const sinp = { ...BASE_INP };
-  const sro  = { ...BASE_INP, background:"#eef4ff", color:"#1a4fd6", fontWeight:700, cursor:"default" };
-  const slbl = { display:"block", fontSize:10, fontWeight:700, color:"#4a6494", textTransform:"uppercase", letterSpacing:1, marginBottom:4 };
+  const copySummary = () => {
+    const lines = summaryItems.map(([k,v])=>`${k.replace(/[^\w ]/g,'').trim()}: ₹${fmt(v)}`).join('\n');
+    const text = `COST ESTIMATE — ${quoteNo}\n${'='.repeat(32)}\n${jobName?'Job: '+jobName+'\n':''}${clientName?'Client: '+clientName+'\n':''}Date: ${jobDate}\n${'='.repeat(32)}\n${lines}\n${'─'.repeat(32)}\nGRAND TOTAL: ₹${fmt(grandTotal)}`;
+    if(navigator.clipboard) navigator.clipboard.writeText(text).then(()=>alert("✅ Cost summary copied!"));
+    else { const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert("✅ Copied!"); }
+  };
 
-  const settingGroups = [
+  /* ══ ADD / REMOVE CUSTOM TYPES ══ */
+  const addCustomType = (which) => {
+    if(which==="uv") {
+      if(!newUVType.name.trim()) return alert("Enter type name");
+      const updated = [...customUVTypes, { id:uid(), name:newUVType.name.trim(), ratePerSheet:newUVType.ratePerSheet }];
+      setCustomUVTypes(updated); setNewUVType({name:"",ratePerSheet:5});
+    } else if(which==="lam") {
+      if(!newLamType.name.trim()) return alert("Enter type name");
+      const updated = [...customLamTypes, { id:uid(), name:newLamType.name.trim(), ratePerSheet:newLamType.ratePerSheet }];
+      setCustomLamTypes(updated); setNewLamType({name:"",ratePerSheet:8});
+    } else {
+      if(!newFoilType.name.trim()) return alert("Enter type name");
+      const updated = [...customFoilTypes, { id:uid(), name:newFoilType.name.trim(), ratePerSheet:newFoilType.ratePerSheet }];
+      setCustomFoilTypes(updated); setNewFoilType({name:"",ratePerSheet:3});
+    }
+  };
+  const removeCustomType = (which, id) => {
+    if(which==="uv")   setCustomUVTypes(customUVTypes.filter(t=>t.id!==id));
+    if(which==="lam")  setCustomLamTypes(customLamTypes.filter(t=>t.id!==id));
+    if(which==="foil") setCustomFoilTypes(customFoilTypes.filter(t=>t.id!==id));
+  };
+
+  /* ══ INPUT STYLE HELPERS ══ */
+  const sinp = { ...BASE_INP };
+
+  /* ════════════ SETTINGS RATE GROUPS ════════════ */
+  const rateGroups = [
     { title:"Paper — Weight Formula", icon:"📄", color:"#1a4fd6", fields:[
       { label:"Base Constant", get:()=>paperSettings.baseConst, set:v=>setPaperSettings(p=>({...p,baseConst:v})), hint:"Industry standard: 3100" },
       { label:"Sheets per Ream (base)", get:()=>paperSettings.reamsBase, set:v=>setPaperSettings(p=>({...p,reamsBase:v})), hint:"Standard: 500 sheets" },
-    ]},
-    { title:"Paper — Unit Reference", icon:"📋", color:"#1a4fd6", fields:[
-      { label:"Sheets per Packet", get:()=>100, ro:true, hint:"Fixed: 100 sheets" },
-      { label:"Sheets per Ream", get:()=>500, ro:true, hint:"Fixed: 500 sheets" },
-      { label:"Sheets per Gross", get:()=>144, ro:true, hint:"Fixed: 144 sheets" },
     ]},
     { title:"Plates", icon:"🖨", color:"#2563eb", fields:[
       { label:"Normal Plate Rate (₹)", get:()=>plates.normalRate, set:v=>setPlates(p=>({...p,normalRate:v})) },
@@ -375,13 +438,13 @@ function App() {
     ]},
     { title:"Printing — Normal Tiers", icon:"🎨", color:"#7c3aed", fields:[
       { label:"Run Charge / 1000 Sheets", get:()=>printing.runCharge, set:v=>setPrinting(p=>({...p,runCharge:v})) },
-      { label:"≤1000 sheets — Rate", get:()=>printing.tier1000, set:v=>setPrinting(p=>({...p,tier1000:v})) },
-      { label:"≤5000 sheets — Rate", get:()=>printing.tier5000, set:v=>setPrinting(p=>({...p,tier5000:v})) },
-      { label:"≤10000 sheets — Rate", get:()=>printing.tier10000, set:v=>setPrinting(p=>({...p,tier10000:v})) },
-      { label:">10000 sheets — Rate", get:()=>printing.tierAbove, set:v=>setPrinting(p=>({...p,tierAbove:v})) },
+      { label:"≤1000 sheets Rate", get:()=>printing.tier1000, set:v=>setPrinting(p=>({...p,tier1000:v})) },
+      { label:"≤5000 sheets Rate", get:()=>printing.tier5000, set:v=>setPrinting(p=>({...p,tier5000:v})) },
+      { label:"≤10000 sheets Rate", get:()=>printing.tier10000, set:v=>setPrinting(p=>({...p,tier10000:v})) },
+      { label:">10000 sheets Rate", get:()=>printing.tierAbove, set:v=>setPrinting(p=>({...p,tierAbove:v})) },
       { label:"Pantone / Special Rate", get:()=>printing.pantoneRate, set:v=>setPrinting(p=>({...p,pantoneRate:v})) },
     ]},
-    { title:"Printing — LED", icon:"💡", color:"#7c3aed", fields:[
+    { title:"Printing — LED Rate", icon:"💡", color:"#7c3aed", fields:[
       { label:"LED Rate / Sheet (₹)", get:()=>printing.ledRate, set:v=>setPrinting(p=>({...p,ledRate:v})), hint:"Default: ₹3/sheet" },
     ]},
     { title:"Varnish", icon:"✨", color:"#0891b2", fields:[
@@ -400,6 +463,9 @@ function App() {
       { label:"Rate / Sheet (₹)", get:()=>uv.spotPerSheet, set:v=>setUV(p=>({...p,spotPerSheet:v})) },
       { label:"Initial / Setup Charge (₹)", get:()=>uv.spotInitial, set:v=>setUV(p=>({...p,spotInitial:v})) },
     ]},
+    { title:"UV — Per Sheet", icon:"💧", color:"#0369a1", fields:[
+      { label:"Rate per Sheet (₹)", get:()=>uv.perSheetRate, set:v=>setUV(p=>({...p,perSheetRate:v})), hint:"Default: ₹5/sheet" },
+    ]},
     { title:"Lamination — Gloss", icon:"🟢", color:"#16a34a", fields:[
       { label:"Divisor (sq inch)", get:()=>lamination.glossDivisor, set:v=>setLamination(p=>({...p,glossDivisor:v})) },
       { label:"Rate (₹ per unit)", get:()=>lamination.glossPaisa, set:v=>setLamination(p=>({...p,glossPaisa:v})) },
@@ -411,42 +477,347 @@ function App() {
     { title:"Lamination — Velvet", icon:"🟣", color:"#16a34a", fields:[
       { label:"Rate / Sheet (₹)", get:()=>lamination.velvetRate, set:v=>setLamination(p=>({...p,velvetRate:v})), hint:"Default: ₹8.28/sheet" },
     ]},
+    { title:"Lamination — Per Sheet", icon:"📋", color:"#16a34a", fields:[
+      { label:"Rate per Sheet (₹)", get:()=>lamination.perSheetRate, set:v=>setLamination(p=>({...p,perSheetRate:v})), hint:"Default: ₹6/sheet" },
+    ]},
     { title:"Foiling Block — Making", icon:"🔲", color:"#b45309", fields:[
       { label:"Making Rate / sq inch (₹)", get:()=>foilingBlock.rate, set:v=>setFoilingBlock(p=>({...p,rate:v})) },
     ]},
-    // ── UPDATED SETTINGS ──
     { title:"Die Block", icon:"⬛", color:"#dc2626", fields:[
-      { label:"Default Rate per Block (₹)", get:()=>dieBlock.rate, set:v=>setDieBlock(p=>({...p,rate:v})), hint:"Formula: No. of Blocks × Rate" },
+      { label:"Default Rate per Block (₹)", get:()=>dieBlock.rate, set:v=>setDieBlock(p=>({...p,rate:v})), hint:"Rate per Block or sq inch" },
     ]},
-    { title:"Die Cutting — Per 1000 Sheets", icon:"✂️", color:"#dc2626", fields:[
-      { label:"Rate per 1000 Sheets (₹)", get:()=>dieCutting.rate, set:v=>setDieCutting(p=>({...p,rate:v})), hint:"Default: ₹300 per 1000 sheets" },
+    { title:"Die Cutting", icon:"✂️", color:"#dc2626", fields:[
+      { label:"Rate per 1000 Sheets (₹)", get:()=>dieCutting.rate, set:v=>setDieCutting(p=>({...p,rate:v})), hint:"Default: ₹300" },
     ]},
     { title:"Pasting Rates", icon:"📦", color:"#64748b", fields:[
-      { label:"Lock Pasting ₹/1000 Sheets", get:()=>pasting.lockRate, set:v=>setPasting(p=>({...p,lockRate:v})), hint:"Default: ₹250/1000" },
-      { label:"Side Pasting ₹/1000 Sheets", get:()=>pasting.sideRate, set:v=>setPasting(p=>({...p,sideRate:v})), hint:"Default: ₹100/1000" },
+      { label:"Lock Pasting ₹/1000", get:()=>pasting.lockRate, set:v=>setPasting(p=>({...p,lockRate:v})), hint:"Default: ₹250/1000" },
+      { label:"Side Pasting ₹/1000", get:()=>pasting.sideRate, set:v=>setPasting(p=>({...p,sideRate:v})), hint:"Default: ₹100/1000" },
     ]},
-    { title:"Packaging — Per Carton Rate", icon:"🎁", color:"#64748b", fields:[
-      { label:"Rate per Carton (₹)", get:()=>packaging.ratePerCarton, set:v=>setPackaging(p=>({...p,ratePerCarton:v})), hint:"Default: ₹60/carton" },
-    ]},
-    { title:"Dispatch / Forwarding", icon:"🚚", color:"#64748b", fields:[
-      { label:"Default Fixed Rate (₹)", get:()=>dispatch.fixedRate, set:v=>setDispatch(p=>({...p,fixedRate:v})), hint:"Default: ₹600–₹700" },
+    { title:"Packaging & Dispatch", icon:"🎁", color:"#64748b", fields:[
+      { label:"Rate per Carton (₹)", get:()=>packaging.ratePerCarton, set:v=>setPackaging(p=>({...p,ratePerCarton:v})), hint:"Default: ₹60" },
+      { label:"Default Dispatch Rate (₹)", get:()=>dispatch.fixedRate, set:v=>setDispatch(p=>({...p,fixedRate:v})), hint:"Default: ₹600" },
     ]},
   ];
 
-  const copySummary = () => {
-    const lines = summaryItems.map(([k,v])=>`${k.replace(/[^\w ]/g,'').trim()}: ₹${fmt(v)}`).join('\n');
-    const text = `COST ESTIMATE\n${'='.repeat(32)}\n${jobName?'Job: '+jobName+'\n':''}${clientName?'Client: '+clientName+'\n':''}Date: ${jobDate}\n${'='.repeat(32)}\n${lines}\n${'─'.repeat(32)}\nGRAND TOTAL: ₹${fmt(grandTotal)}`;
-    if(navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(()=>alert("✅ Cost summary copied!"));
-    } else {
-      const ta=document.createElement('textarea'); ta.value=text;
-      document.body.appendChild(ta); ta.select();
-      document.execCommand('copy'); document.body.removeChild(ta);
-      alert("✅ Cost summary copied!");
-    }
+  /* ════════════ CLIENT SLIP MODAL ════════════ */
+  const [slipShowBreakdown, setSlipShowBreakdown] = useState(false);
+  const [slipRemark, setSlipRemark] = useState("");
+
+  const copyWhatsApp = () => {
+    const ci = companyInfo;
+    const dateStr = new Date(jobDate).toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" });
+    const breakdownLines = slipShowBreakdown
+      ? summaryItems.map(([k,v]) => `  • ${k.replace(/[^\w ]/g,'').trim()}: ₹${fmt(v)}`).join('\n') + '\n'
+      : "";
+    const text =
+`*${ci.name || "Printing Works"}*${ci.phone ? " | " + ci.phone : ""}
+
+📋 *Estimate Slip*
+─────────────────────
+*Slip No:* ${quoteNo}
+*Date:* ${dateStr}
+*Client:* ${clientName || "—"}
+*Job:* ${jobName || "—"}
+─────────────────────
+${breakdownLines}*Total Amount: ₹${fmt(grandTotal)}*
+─────────────────────${slipRemark ? "\n📝 " + slipRemark : ""}
+
+_This is an estimated amount. Final may vary._`;
+    if(navigator.clipboard) navigator.clipboard.writeText(text).then(()=>alert("✅ WhatsApp text copied! Paste in chat."));
+    else { const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert("✅ Copied!"); }
   };
 
-  /* ══ RENDER ══ */
+  const QuoteModal = () => {
+    const ci = companyInfo;
+    const dateStr = new Date(jobDate).toLocaleDateString("en-IN", { day:"2-digit", month:"long", year:"numeric" });
+
+    return (
+      <div style={{ position:"fixed", inset:0, background:"rgba(10,20,60,.65)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:2000, padding:16 }}>
+        <div style={{ background:"#fff", borderRadius:12, width:"100%", maxWidth:640, maxHeight:"94vh", overflow:"hidden", display:"flex", flexDirection:"column", boxShadow:"0 32px 80px rgba(10,20,60,.4)" }}>
+
+          {/* ── Modal toolbar (no-print) ── */}
+          <div className="no-print" style={{ background:"#1a4fd6", padding:"12px 18px", display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0 }}>
+            <span style={{ color:"#fff", fontWeight:800, fontSize:14 }}>📄 Client Slip Preview</span>
+            <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+              {/* breakdown toggle */}
+              <div style={{ display:"flex", alignItems:"center", gap:7, background:"rgba(255,255,255,.12)", border:"1.5px solid rgba(255,255,255,.25)", borderRadius:7, padding:"5px 12px" }}>
+                <span style={{ color:"rgba(255,255,255,.75)", fontSize:11, fontWeight:600 }}>Show breakdown</span>
+                <Toggle on={slipShowBreakdown} onClick={()=>setSlipShowBreakdown(v=>!v)} />
+              </div>
+              <button onClick={copyWhatsApp}
+                style={{ background:"#25D366", border:"none", color:"#fff", padding:"7px 13px", borderRadius:7, fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
+                📲 Copy for WhatsApp
+              </button>
+              <button onClick={()=>window.print()}
+                style={{ background:"rgba(255,255,255,.18)", border:"1.5px solid rgba(255,255,255,.3)", color:"#fff", padding:"7px 13px", borderRadius:7, fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
+                🖨 Print / PDF
+              </button>
+              <button onClick={()=>setShowQuote(false)}
+                style={{ background:"rgba(255,255,255,.15)", border:"none", color:"#fff", width:30, height:30, borderRadius:6, fontSize:18, cursor:"pointer", fontFamily:"inherit" }}>×</button>
+            </div>
+          </div>
+
+          {/* ── Remark input (no-print) ── */}
+          <div className="no-print" style={{ padding:"10px 18px", background:"#f5f8ff", borderBottom:"1px solid #e8f0fe", flexShrink:0, display:"flex", gap:10, alignItems:"center" }}>
+            <span style={{ fontSize:11, fontWeight:700, color:"#4a6494", whiteSpace:"nowrap" }}>Remark (optional):</span>
+            <input value={slipRemark} onChange={e=>setSlipRemark(e.target.value)}
+              placeholder="e.g. 50% advance paid, urgent delivery, GST extra..."
+              style={{ ...BASE_INP, fontSize:12 }} />
+          </div>
+
+          {/* ══ PRINTABLE SLIP AREA ══ */}
+          <div style={{ overflowY:"auto", flex:1, padding:"32px 40px 36px", background:"#fff" }}>
+
+            {/* Header */}
+            <div style={{ borderBottom:"3px solid #1a4fd6", paddingBottom:16, marginBottom:20 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                <div>
+                  <div style={{ fontSize:22, fontWeight:800, color:"#1a4fd6", letterSpacing:-0.3, lineHeight:1.1 }}>
+                    {ci.name || "Your Company Name"}
+                  </div>
+                  {ci.tagline && <div style={{ fontSize:11, color:"#8ca5cc", marginTop:3, fontWeight:500, letterSpacing:.4 }}>{ci.tagline}</div>}
+                  <div style={{ marginTop:8, fontSize:12, color:"#4a6494", lineHeight:1.7 }}>
+                    {ci.phone   && <span style={{ marginRight:16 }}>📞 {ci.phone}</span>}
+                    {ci.email   && <span>✉️ {ci.email}</span>}
+                    {ci.address && <div style={{ marginTop:2 }}>📍 {ci.address}</div>}
+                  </div>
+                </div>
+                <div style={{ textAlign:"right", flexShrink:0 }}>
+                  <div style={{ fontSize:10, fontWeight:700, color:"#8ca5cc", textTransform:"uppercase", letterSpacing:1.2 }}>Estimate Slip</div>
+                  <div style={{ fontSize:18, fontWeight:800, color:"#1a4fd6", fontFamily:"monospace", marginTop:2 }}>{quoteNo}</div>
+                  <div style={{ fontSize:12, color:"#4a6494", marginTop:5 }}>{dateStr}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Client + Job row */}
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 2fr", gap:14, marginBottom:22 }}>
+              <div style={{ background:"#f5f8ff", borderRadius:7, padding:"12px 14px", border:"1px solid #e8f0fe" }}>
+                <div style={{ fontSize:9, fontWeight:700, color:"#8ca5cc", textTransform:"uppercase", letterSpacing:1.1, marginBottom:5 }}>Client</div>
+                <div style={{ fontWeight:800, fontSize:14, color:"#1e2d50" }}>{clientName || "—"}</div>
+              </div>
+              <div style={{ background:"#f5f8ff", borderRadius:7, padding:"12px 14px", border:"1px solid #e8f0fe" }}>
+                <div style={{ fontSize:9, fontWeight:700, color:"#8ca5cc", textTransform:"uppercase", letterSpacing:1.1, marginBottom:5 }}>Job / Description</div>
+                <div style={{ fontWeight:700, fontSize:14, color:"#1e2d50" }}>{jobName || "—"}</div>
+              </div>
+            </div>
+
+            {/* Optional breakdown */}
+            {slipShowBreakdown && summaryItems.length > 0 && (
+              <table style={{ width:"100%", borderCollapse:"collapse", marginBottom:16, fontSize:13 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign:"left", padding:"7px 10px", background:"#e8f0fe", color:"#1a4fd6", fontWeight:700, fontSize:10, textTransform:"uppercase", letterSpacing:.8, borderRadius:"4px 0 0 4px" }}>Item</th>
+                    <th style={{ textAlign:"right", padding:"7px 10px", background:"#e8f0fe", color:"#1a4fd6", fontWeight:700, fontSize:10, textTransform:"uppercase", letterSpacing:.8, borderRadius:"0 4px 4px 0", width:140 }}>Amount (₹)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summaryItems.map(([name,val], i)=>(
+                    <tr key={name} style={{ background: i%2===0?"#fff":"#f8faff" }}>
+                      <td style={{ padding:"8px 10px", color:"#1e2d50", fontWeight:600, borderBottom:"1px solid #eef2fb" }}>
+                        {name.replace(/[^\w ]/g,'').trim()}
+                      </td>
+                      <td style={{ padding:"8px 10px", textAlign:"right", fontFamily:"monospace", fontWeight:700, color:"#1e2d50", borderBottom:"1px solid #eef2fb" }}>
+                        ₹ {fmt(val)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            {/* Total block */}
+            <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:22 }}>
+              <div style={{ background:"#1a4fd6", borderRadius:9, padding:"15px 28px", textAlign:"right", minWidth:240 }}>
+                <div style={{ color:"rgba(255,255,255,.6)", fontSize:9, fontWeight:700, textTransform:"uppercase", letterSpacing:1.5, marginBottom:4 }}>
+                  {slipShowBreakdown ? "Grand Total" : "Estimated Amount"}
+                </div>
+                <div style={{ color:"#fff", fontFamily:"monospace", fontSize:30, fontWeight:800, lineHeight:1 }}>
+                  ₹ {fmt(grandTotal)}
+                </div>
+              </div>
+            </div>
+
+            {/* Remark (if any) */}
+            {slipRemark && (
+              <div style={{ background:"#fffbeb", border:"1px solid #fde68a", borderRadius:7, padding:"10px 14px", marginBottom:18, fontSize:12, color:"#92400e" }}>
+                📝 <b>Note:</b> {slipRemark}
+              </div>
+            )}
+
+            {/* Footer line */}
+            <div style={{ borderTop:"1px solid #e8f0fe", paddingTop:14, display:"flex", justifyContent:"space-between", alignItems:"flex-end" }}>
+              <div style={{ fontSize:10, color:"#8ca5cc", lineHeight:1.8 }}>
+                <div>This is an estimated amount. Final may vary.</div>
+                {ci.gstin && <div>GSTIN: {ci.gstin}</div>}
+              </div>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ fontSize:10, color:"#8ca5cc", marginBottom:28 }}>Authorised Signatory</div>
+                <div style={{ borderTop:"1.5px solid #1e2d50", paddingTop:6, fontSize:11, fontWeight:700, color:"#1e2d50" }}>
+                  {ci.name || "Company Name"}
+                </div>
+              </div>
+            </div>
+
+          </div>{/* end printable area */}
+        </div>
+      </div>
+    );
+  };
+
+  /* ════════════ SETTINGS MODAL ════════════ */
+  const SettingsModal = () => (
+    <div style={{ position:"fixed", inset:0, background:"rgba(15,30,70,.5)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
+      <div style={{ background:T.bgCard, borderRadius:14, width:700, maxHeight:"90vh", overflow:"hidden", display:"flex", flexDirection:"column", boxShadow:"0 20px 60px rgba(15,30,70,.3)", border:`1.5px solid ${T.border}` }}>
+        {/* Header */}
+        <div style={{ background:T.bgHeader, padding:"16px 22px", display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0 }}>
+          <div>
+            <div style={{ color:"#fff", fontWeight:800, fontSize:15 }}>⚙️ Settings</div>
+            <div style={{ color:"rgba(255,255,255,.6)", fontSize:11, marginTop:1 }}>Rates, Company Info & Custom Types</div>
+          </div>
+          <button onClick={()=>setShowSettings(false)} style={{ background:"rgba(255,255,255,.15)", border:"none", color:"#fff", width:30, height:30, borderRadius:6, fontSize:18, cursor:"pointer", fontFamily:"inherit" }}>×</button>
+        </div>
+        {/* Tabs */}
+        <div style={{ display:"flex", gap:0, borderBottom:`1.5px solid ${T.border}`, background:"#f5f8ff", flexShrink:0 }}>
+          {[["rates","📊 Rates"],["company","🏢 Company Info"],["custom","🎨 Custom Types"]].map(([tab,label])=>(
+            <button key={tab} onClick={()=>setSettingsTab(tab)} style={{
+              padding:"11px 22px", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
+              background:settingsTab===tab?"#fff":"transparent", color:settingsTab===tab?T.primary:T.textMid,
+              border:"none", borderBottom:settingsTab===tab?`2.5px solid ${T.primary}`:"2.5px solid transparent"
+            }}>{label}</button>
+          ))}
+        </div>
+        {/* Body */}
+        <div style={{ overflowY:"auto", padding:"16px 22px 8px", flex:1 }}>
+
+          {/* ── TAB: RATES ── */}
+          {settingsTab==="rates" && rateGroups.map(group=>(
+            <div key={group.title} style={{ marginBottom:10, borderRadius:8, border:`1.5px solid ${T.border}`, overflow:"hidden" }}>
+              <div style={{ background:T.bgSection, padding:"9px 14px", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:8 }}>
+                <span>{group.icon}</span>
+                <span style={{ fontSize:12, fontWeight:700, color:group.color, textTransform:"uppercase", letterSpacing:.8 }}>{group.title}</span>
+              </div>
+              <div style={{ padding:"12px 14px", display:"flex", gap:10, flexWrap:"wrap" }}>
+                {group.fields.map(f=>(
+                  <div key={f.label} style={{ flex:1, minWidth:170 }}>
+                    <label style={{ display:"block", fontSize:10, fontWeight:700, color:"#4a6494", textTransform:"uppercase", letterSpacing:1, marginBottom:4 }}>{f.label}</label>
+                    <input type="number" value={f.get()} readOnly={!!f.ro}
+                      onChange={e=>!f.ro&&f.set&&f.set(e.target.value)}
+                      style={f.ro ? { ...BASE_INP, background:"#eef4ff", color:"#1a4fd6", fontWeight:700, cursor:"default" } : BASE_INP} />
+                    {f.hint && <div style={{ color:T.textDim, fontSize:10, marginTop:3 }}>{f.hint}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {/* ── TAB: COMPANY INFO ── */}
+          {settingsTab==="company" && (
+            <div>
+              <div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:7, padding:"10px 14px", marginBottom:14, fontSize:12, color:"#1e40af" }}>
+                💡 Company info appears on the <b>Client Quote</b> printout. Fill once, save, and it auto-loads.
+              </div>
+              {[
+                {label:"Company / Business Name", key:"name", placeholder:"e.g. Deepak Printing Works"},
+                {label:"Tagline / Speciality", key:"tagline", placeholder:"e.g. Offset & Digital Printing"},
+                {label:"Address", key:"address", placeholder:"Full address with area, city, PIN"},
+                {label:"Phone / WhatsApp", key:"phone", placeholder:"+91 XXXXX XXXXX"},
+                {label:"Email", key:"email", placeholder:"info@yourcompany.com"},
+                {label:"GSTIN", key:"gstin", placeholder:"22AAAAA0000A1Z5"},
+              ].map(f=>(
+                <div key={f.key} style={{ marginBottom:12 }}>
+                  <label style={{ ...LBL }}>{f.label}</label>
+                  <input value={companyInfo[f.key]||""} placeholder={f.placeholder}
+                    onChange={e=>setCompanyInfo(p=>({...p,[f.key]:e.target.value}))}
+                    style={BASE_INP} />
+                </div>
+              ))}
+              <div style={{ marginBottom:12 }}>
+                <label style={{ ...LBL }}>Default Terms & Conditions (one per line)</label>
+                <textarea value={companyInfo.terms||""} rows={5}
+                  placeholder={"50% advance required\nGST extra as applicable\nValid for 15 days\nPayment within 7 days of delivery"}
+                  onChange={e=>setCompanyInfo(p=>({...p,terms:e.target.value}))}
+                  style={{ ...BASE_INP, resize:"vertical", lineHeight:1.8 }} />
+              </div>
+            </div>
+          )}
+
+          {/* ── TAB: CUSTOM TYPES ── */}
+          {settingsTab==="custom" && (
+            <div>
+              <div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:7, padding:"10px 14px", marginBottom:14, fontSize:12, color:"#1e40af" }}>
+                💡 Add custom UV / Lamination / Foiling types. Rate is <b>per sheet</b>. They appear in the dropdown inside each section.
+              </div>
+
+              {/* UV Custom Types */}
+              {[
+                { label:"UV Coating — Custom Types", icon:"💡", color:"#0369a1", list:customUVTypes, which:"uv", newVal:newUVType, setNew:setNewUVType },
+                { label:"Lamination — Custom Types", icon:"🏷", color:"#16a34a", list:customLamTypes, which:"lam", newVal:newLamType, setNew:setNewLamType },
+                { label:"Foiling — Custom Types", icon:"🌟", color:"#b45309", list:customFoilTypes, which:"foil", newVal:newFoilType, setNew:setNewFoilType },
+              ].map(({ label, icon, color, list, which, newVal, setNew })=>(
+                <div key={which} style={{ marginBottom:16, borderRadius:8, border:`1.5px solid ${T.border}`, overflow:"hidden" }}>
+                  <div style={{ background:T.bgSection, padding:"9px 14px", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:8 }}>
+                    <span>{icon}</span>
+                    <span style={{ fontSize:12, fontWeight:700, color, textTransform:"uppercase", letterSpacing:.8 }}>{label}</span>
+                  </div>
+                  <div style={{ padding:"12px 14px" }}>
+                    {/* Existing custom types */}
+                    {list.length>0 && (
+                      <div style={{ marginBottom:10 }}>
+                        {list.map(t=>(
+                          <div key={t.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#f5f8ff", borderRadius:6, marginBottom:6, border:`1px solid ${T.border}` }}>
+                            <span style={{ flex:2, fontSize:13, fontWeight:600, color:T.text }}>{t.name}</span>
+                            <span style={{ fontSize:12, color:T.textMid, fontFamily:"monospace" }}>₹{t.ratePerSheet}/sheet</span>
+                            <button onClick={()=>removeCustomType(which, t.id)} style={{ background:"#fef2f2", border:"1.5px solid #fecaca", color:"#dc2626", width:26, height:26, borderRadius:5, cursor:"pointer", fontSize:14, fontFamily:"inherit", flexShrink:0, padding:0 }}>×</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {list.length===0 && <div style={{ color:T.textDim, fontSize:12, marginBottom:8, fontStyle:"italic" }}>No custom types added yet.</div>}
+                    {/* Add new */}
+                    <div style={{ display:"flex", gap:8, alignItems:"flex-end" }}>
+                      <div style={{ flex:3 }}>
+                        <label style={{ ...LBL }}>Type Name</label>
+                        <input value={newVal.name} placeholder="e.g. Soft Touch, Anti-Scratch..."
+                          onChange={e=>setNew(p=>({...p,name:e.target.value}))}
+                          onKeyDown={e=>e.key==="Enter"&&addCustomType(which)}
+                          style={BASE_INP} />
+                      </div>
+                      <div style={{ flex:1 }}>
+                        <label style={{ ...LBL }}>Rate/Sheet (₹)</label>
+                        <input type="number" value={newVal.ratePerSheet}
+                          onChange={e=>setNew(p=>({...p,ratePerSheet:e.target.value}))}
+                          style={BASE_INP} />
+                      </div>
+                      <button onClick={()=>addCustomType(which)} style={{ background:color, color:"#fff", border:"none", padding:"9px 16px", borderRadius:6, cursor:"pointer", fontWeight:700, fontSize:12, fontFamily:"inherit", flexShrink:0, height:36 }}>
+                        + Add
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        {/* Footer */}
+        <div style={{ padding:"14px 22px", borderTop:`1px solid ${T.border}`, background:T.bgSub, flexShrink:0 }}>
+          <div style={{ display:"flex", gap:8, marginBottom:6 }}>
+            <button onClick={handleSaveSettings} className="btn-primary"
+              style={{ flex:3, background:T.primary, color:"#fff", border:"none", padding:12, borderRadius:8, fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
+              💾 Save & Apply
+            </button>
+            <button onClick={handleResetRates}
+              style={{ flex:1, background:"#fef2f2", color:"#dc2626", border:"1.5px solid #fecaca", padding:12, borderRadius:8, fontSize:13, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
+              ♻️ Reset
+            </button>
+          </div>
+          <div style={{ fontSize:11, color:"#4a6494", textAlign:"center" }}>Rates & settings auto-load next time</div>
+        </div>
+      </div>
+    </div>
+  );
+
+  /* ════════════ RENDER ════════════ */
   return (
     <div style={{ minHeight:"100vh", background:T.bgPage }}>
 
@@ -467,7 +838,7 @@ function App() {
             </button>
             <button onClick={()=>setShowSettings(true)} className="btn-primary"
               style={{ background:"rgba(255,255,255,.13)", border:"1.5px solid rgba(255,255,255,.25)", color:"#fff", padding:"7px 14px", borderRadius:7, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
-              ⚙️ Rate Settings
+              ⚙️ Settings
             </button>
           </div>
         </div>
@@ -475,9 +846,8 @@ function App() {
 
       {/* TOAST */}
       {saveMsg && (
-        <div style={{ position:"fixed", bottom:24, left:"50%", transform:"translateX(-50%)", zIndex:2000,
-          background:"#1e2d50", color:"#fff", padding:"12px 24px", borderRadius:10,
-          fontSize:13, fontWeight:600, boxShadow:"0 8px 24px rgba(0,0,0,.25)" }}>
+        <div style={{ position:"fixed", bottom:24, left:"50%", transform:"translateX(-50%)", zIndex:3000,
+          background:"#1e2d50", color:"#fff", padding:"12px 24px", borderRadius:10, fontSize:13, fontWeight:600, boxShadow:"0 8px 24px rgba(0,0,0,.25)" }}>
           {saveMsg}
         </div>
       )}
@@ -489,11 +859,11 @@ function App() {
         <div style={{ background:"#eff6ff", border:"1.5px solid #bfdbfe", borderRadius:8, padding:"10px 16px", marginBottom:14, display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
           <span style={{ fontSize:16 }}>📐</span>
           <span style={{ fontSize:12, color:"#1e40af" }}>
-            <b>Paper Weight Formula:</b> L × W × GSM × Sheet Qty ÷ ({paperSettings.baseConst} × {paperSettings.reamsBase})
+            <b>Paper Weight:</b> L × W × GSM × SheetQty ÷ ({paperSettings.baseConst} × {paperSettings.reamsBase})
             &nbsp;|&nbsp; <span style={{ color:"#3b70e8", cursor:"pointer", textDecoration:"underline" }} onClick={()=>setShowSettings(true)}>Change in Settings ⚙️</span>
           </span>
           <span style={{ fontSize:11, color:"#16a34a", background:"#f0fdf4", border:"1px solid #bbf7d0", padding:"3px 10px", borderRadius:6, fontWeight:600, whiteSpace:"nowrap" }}>
-            {localStorage.getItem("printcost_plates") ? "💾 Rates loaded from memory" : "⚙️ Set your rates in Settings"}
+            {localStorage.getItem("printcost_plates") ? "💾 Rates loaded" : "⚙️ Set rates in Settings"}
           </span>
         </div>
 
@@ -501,8 +871,7 @@ function App() {
         <div style={{ background:T.bgCard, borderRadius:10, padding:"16px 20px", marginBottom:16, border:`1.5px solid ${T.border}`, boxShadow:T.shadow, display:"flex", gap:14, flexWrap:"wrap", alignItems:"flex-end" }}>
           <div style={{ flex:2, minWidth:200 }}>
             <label style={LBL}>Job Name / Description</label>
-            <input placeholder="e.g. Wedding Card — 5000 pcs" value={jobName} onChange={e=>setJobName(e.target.value)}
-              style={{ ...BASE_INP, fontSize:14, fontWeight:600 }} />
+            <input placeholder="e.g. Wedding Card — 5000 pcs" value={jobName} onChange={e=>setJobName(e.target.value)} style={{ ...BASE_INP, fontSize:14, fontWeight:600 }} />
           </div>
           <div style={{ flex:1, minWidth:150 }}>
             <label style={LBL}>Client Name</label>
@@ -511,6 +880,10 @@ function App() {
           <div style={{ flex:1, minWidth:130 }}>
             <label style={LBL}>Date</label>
             <input type="date" value={jobDate} onChange={e=>setJobDate(e.target.value)} style={BASE_INP} />
+          </div>
+          <div style={{ flex:1, minWidth:140 }}>
+            <label style={LBL}>Quote No.</label>
+            <input value={quoteNo} onChange={e=>setQuoteNo(e.target.value)} style={BASE_INP} />
           </div>
         </div>
 
@@ -521,7 +894,6 @@ function App() {
             <SectionCard title="Paper Measurement" icon="📄" alwaysOn total={paperCalc.totalPrice}>
               <div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:6, padding:"7px 12px", marginBottom:12, fontSize:11, color:"#1e40af" }}>
                 ⚠️ Enter <b>SHEET QTY = total number of sheets</b> (e.g. 5000). Equivalent units shown automatically.
-                &nbsp; Formula: <code style={{ fontFamily:"monospace" }}>L × W × GSM × SheetQty ÷ ({n(paperSettings.baseConst)||3100} × {n(paperSettings.reamsBase)||500})</code>
               </div>
               <div style={{ overflowX:"auto" }}>
                 <div style={{ display:"grid", gridTemplateColumns:"68px 68px 60px 86px 90px 90px 90px 96px 102px 28px", gap:6, minWidth:720, marginBottom:6 }}>
@@ -542,16 +914,13 @@ function App() {
                     </select>
                     <input type="number" value={row.sheetQty} placeholder="e.g. 5000"
                       onChange={e=>{const r=[...paperRows];r[idx]={...r[idx],sheetQty:e.target.value};setPaperRows(r);}}
-                      style={{ ...BASE_INP, padding:"7px 8px", fontSize:12, borderColor: row.sheetQty?"#c5d8f8":"#fbbf24" }} />
-                    <input value={row.sheetQty ? `${row.equivUnits} ${row.unit==="Packet"?"Pkts":row.unit==="Ream"?"Reams":"Gross"}` : "—"}
-                      readOnly style={{ ...BASE_RO, padding:"7px 8px", fontSize:11 }} />
-                    <input value={row.weight ? row.weight.toFixed(4) : "0.0000"} readOnly
-                      style={{ ...BASE_RO, padding:"7px 8px", fontSize:12 }} />
+                      style={{ ...BASE_INP, padding:"7px 8px", fontSize:12, borderColor:row.sheetQty?"#c5d8f8":"#fbbf24" }} />
+                    <input value={row.sheetQty ? `${row.equivUnits} ${row.unit==="Packet"?"Pkts":row.unit==="Ream"?"Reams":"Gross"}` : "—"} readOnly style={{ ...BASE_RO, padding:"7px 8px", fontSize:11 }} />
+                    <input value={row.weight ? row.weight.toFixed(4) : "0.0000"} readOnly style={{ ...BASE_RO, padding:"7px 8px", fontSize:12 }} />
                     <input type="number" value={row.ratePerKg} placeholder="₹/Kg"
                       onChange={e=>{const r=[...paperRows];r[idx]={...r[idx],ratePerKg:e.target.value};setPaperRows(r);}}
                       style={{ ...BASE_INP, padding:"7px 8px", fontSize:12 }} />
-                    <input value={fmt(row.price)} readOnly
-                      style={{ ...BASE_RO, padding:"7px 8px", fontSize:12, color:T.success }} />
+                    <input value={fmt(row.price)} readOnly style={{ ...BASE_RO, padding:"7px 8px", fontSize:12, color:T.success }} />
                     <button onClick={()=>setPaperRows(paperRows.filter((_,i)=>i!==idx))}
                       style={{ width:28, height:32, background:"#fef2f2", border:"1.5px solid #fecaca", color:T.danger, borderRadius:6, cursor:"pointer", fontSize:16, padding:0, fontFamily:"inherit" }}>×</button>
                   </div>
@@ -564,15 +933,15 @@ function App() {
               <div style={{ height:1, background:"#eef2fb", margin:"12px 0" }} />
               <div style={{ display:"flex", gap:14, justifyContent:"flex-end", flexWrap:"wrap" }}>
                 <div style={{ textAlign:"right" }}>
-                  <div style={{ fontSize:10, color:T.textDim, fontWeight:700, textTransform:"uppercase", letterSpacing:.8 }}>Total Sheets</div>
-                  <div style={{ fontSize:14, color:T.text, fontWeight:700, fontFamily:"monospace" }}>{paperCalc.totalSheets.toLocaleString("en-IN")}</div>
+                  <div style={{ fontSize:10, color:T.textDim, fontWeight:700, textTransform:"uppercase" }}>Total Sheets</div>
+                  <div style={{ fontSize:14, color:T.text, fontWeight:700, fontFamily:"monospace" }}>{fmtInt(paperCalc.totalSheets)}</div>
                 </div>
                 <div style={{ textAlign:"right" }}>
-                  <div style={{ fontSize:10, color:T.textDim, fontWeight:700, textTransform:"uppercase", letterSpacing:.8 }}>Total Weight</div>
+                  <div style={{ fontSize:10, color:T.textDim, fontWeight:700, textTransform:"uppercase" }}>Total Weight</div>
                   <div style={{ fontSize:14, color:T.text, fontWeight:700, fontFamily:"monospace" }}>{paperCalc.totalWeight.toFixed(4)} Kg</div>
                 </div>
                 <div style={{ textAlign:"right", background:T.primaryXl, padding:"4px 14px", borderRadius:8, border:`1px solid ${T.border}` }}>
-                  <div style={{ fontSize:10, color:T.textMid, fontWeight:700, textTransform:"uppercase", letterSpacing:.8 }}>Total Price</div>
+                  <div style={{ fontSize:10, color:T.textMid, fontWeight:700, textTransform:"uppercase" }}>Total Price</div>
                   <div style={{ fontSize:17, color:T.primary, fontWeight:800, fontFamily:"monospace" }}>₹{fmt(paperCalc.totalPrice)}</div>
                 </div>
               </div>
@@ -604,23 +973,21 @@ function App() {
                 <Field label="No of Colors" value={printing.numColors} onChange={v=>setPrinting({...printing,numColors:v})} hide={printing.type==="LED"} />
                 <Field label="Paper Qty (sheets)" value={printing.paperQty} onChange={v=>setPrinting({...printing,paperQty:v})} />
                 <Field label="Pantone / Special Colors" value={printing.specialColors} onChange={v=>setPrinting({...printing,specialColors:v})} />
-                <Field label={printing.rateMode==="Per 1000 Sheets"?"Run Charge / 1000 (Special)":"Run Charge (Special Colors)"} value={printing.runCharge} onChange={v=>setPrinting({...printing,runCharge:v})} note={n(printing.specialColors)===0?"Add special colors to activate":""} />
+                <Field label={printing.rateMode==="Per 1000 Sheets"?"Run Charge / 1000 (Special)":"Run Charge (Special)"} value={printing.runCharge} onChange={v=>setPrinting({...printing,runCharge:v})} note={n(printing.specialColors)===0?"Add special colors to activate":""} />
                 <Field label="Ink Charge (₹)" value={printing.inkCharge} onChange={v=>setPrinting({...printing,inkCharge:v})} />
               </Row>
-              <div style={{ marginTop:8 }}>
-                <SubRow label={printing.type==="LED"?"LED Base":"Base Printing"} value={printingCalc.baseTotal} />
-                {n(printing.specialColors)>0 && <SubRow label={`Pantone × ${printing.specialColors} color(s)`} value={printingCalc.specialTotal} />}
-                {n(printing.specialColors)>0 && <SubRow label="Run Charge (Special Colors)" value={printingCalc.runTotal} />}
-                {n(printing.inkCharge)>0 && <SubRow label="Ink Charge" value={n(printing.inkCharge)} />}
-                <SubRow label="Total Printing" value={printingCalc.total} highlight />
-              </div>
+              <SubRow label={printing.type==="LED"?"LED Base":"Base Printing"} value={printingCalc.baseTotal} />
+              {n(printing.specialColors)>0 && <SubRow label={`Pantone × ${printing.specialColors}`} value={printingCalc.specialTotal} />}
+              {n(printing.specialColors)>0 && <SubRow label="Run Charge (Special)" value={printingCalc.runTotal} />}
+              {n(printing.inkCharge)>0    && <SubRow label="Ink Charge" value={n(printing.inkCharge)} />}
+              <SubRow label="Total Printing" value={printingCalc.total} highlight />
             </SectionCard>
 
             {/* ══ VARNISH ══ */}
             <SectionCard title="Varnish" icon="✨" enabled={varnish.enabled} onToggle={v=>setVarnish({...varnish,enabled:v})} total={varnishTotal}>
               <Row>
                 <Field label="Job Length (in)" value={varnish.length} onChange={v=>setVarnish({...varnish,length:v})} />
-                <Field label="Job Width (in)" value={varnish.width} onChange={v=>setVarnish({...varnish,width:v})} />
+                <Field label="Job Width (in)"  value={varnish.width}  onChange={v=>setVarnish({...varnish,width:v})} />
                 <Field label="Area (sq in)" value={(n(varnish.length)*n(varnish.width)).toFixed(2)} readOnly />
                 <Field label="Sheet Qty" value={varnish.sheetQty} onChange={v=>setVarnish({...varnish,sheetQty:v})} />
                 <Field label="Total Price" value={fmt(varnishTotal)} readOnly />
@@ -631,17 +998,24 @@ function App() {
             {/* ══ UV ══ */}
             <SectionCard title="UV Coating" icon="💡" enabled={uv.enabled} onToggle={v=>setUV({...uv,enabled:v})} total={uvCalc.total}>
               <Row>
-                <Field label="UV Type" value={uv.type} onChange={v=>setUV({...uv,type:v})} options={["Full UV","Hybrid UV","Spot UV"]} />
-                <Field label="Job Length (in)" value={uv.length} onChange={v=>setUV({...uv,length:v})} hide={uv.type==="Spot UV"} />
-                <Field label="Job Width (in)" value={uv.width} onChange={v=>setUV({...uv,width:v})} hide={uv.type==="Spot UV"} />
-                <Field label="Area (sq in)" value={(n(uv.length)*n(uv.width)).toFixed(2)} readOnly hide={uv.type==="Spot UV"} />
+                <Field label="UV Type" value={uv.type} onChange={v=>setUV({...uv,type:v})} options={allUVTypes} />
+                <Field label="Job Length (in)" value={uv.length} onChange={v=>setUV({...uv,length:v})} hide={uv.type==="Spot UV"||uv.type==="Per Sheet"||!!customUVTypes.find(t=>t.name===uv.type)} />
+                <Field label="Job Width (in)"  value={uv.width}  onChange={v=>setUV({...uv,width:v})} hide={uv.type==="Spot UV"||uv.type==="Per Sheet"||!!customUVTypes.find(t=>t.name===uv.type)} />
+                <Field label="Area (sq in)" value={(n(uv.length)*n(uv.width)).toFixed(2)} readOnly hide={uv.type==="Spot UV"||uv.type==="Per Sheet"||!!customUVTypes.find(t=>t.name===uv.type)} />
                 <Field label="Sheet Qty" value={uv.sheetQty} onChange={v=>setUV({...uv,sheetQty:v})} />
                 <Field label="Rate / Sheet (₹)" value={uv.spotPerSheet} onChange={v=>setUV({...uv,spotPerSheet:v})} hide={uv.type!=="Spot UV"} />
                 <Field label="Initial Charge (₹)" value={uv.spotInitial} onChange={v=>setUV({...uv,spotInitial:v})} hide={uv.type!=="Spot UV"} />
+                <Field label="Rate / Sheet (₹)" value={uv.perSheetRate} onChange={v=>setUV({...uv,perSheetRate:v})} hide={uv.type!=="Per Sheet"} />
               </Row>
+              {customUVTypes.find(t=>t.name===uv.type) && (
+                <div style={{ fontSize:11, color:T.textMid, background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:5, padding:"5px 10px", marginBottom:6 }}>
+                  Custom Type: ₹{customUVTypes.find(t=>t.name===uv.type)?.ratePerSheet}/sheet × {uv.sheetQty||0} sheets
+                </div>
+              )}
               {uv.type==="Full UV"   && <Hint text={`(L × W) ÷ ${uv.fullUVDivisor} × ${uv.uvPaisa} × Sheets`} />}
               {uv.type==="Hybrid UV" && <Hint text={`(L × W) ÷ ${uv.hybridUVDivisor} × ${uv.uvPaisa} × Sheets`} />}
               {uv.type==="Spot UV"   && <Hint text={`₹${uv.spotPerSheet}/sheet × Qty + ₹${uv.spotInitial} initial`} />}
+              {uv.type==="Per Sheet" && <Hint text={`₹${uv.perSheetRate}/sheet × ${uv.sheetQty||0} = ₹${fmt(uvCalc.total)}`} />}
               <div style={{ marginTop:8 }}>
                 {uv.type==="Spot UV" && <SubRow label="Initial Charge" value={uvCalc.extra} />}
                 <SubRow label="Total UV" value={uvCalc.total} highlight />
@@ -651,37 +1025,70 @@ function App() {
             {/* ══ LAMINATION ══ */}
             <SectionCard title="Lamination" icon="🏷" enabled={lamination.enabled} onToggle={v=>setLamination({...lamination,enabled:v})} total={laminationTotal}>
               <Row>
-                <Field label="Type" value={lamination.type} onChange={v=>setLamination({...lamination,type:v})} options={["Gloss","Matt","Velvet"]} />
-                <Field label="Job Length (in)" value={lamination.length} onChange={v=>setLamination({...lamination,length:v})} hide={lamination.type==="Velvet"} />
-                <Field label="Job Width (in)" value={lamination.width} onChange={v=>setLamination({...lamination,width:v})} hide={lamination.type==="Velvet"} />
-                <Field label="Area (sq in)" value={(n(lamination.length)*n(lamination.width)).toFixed(2)} readOnly hide={lamination.type==="Velvet"} />
+                <Field label="Type" value={lamination.type} onChange={v=>setLamination({...lamination,type:v})} options={allLamTypes} />
+                <Field label="Job Length (in)" value={lamination.length} onChange={v=>setLamination({...lamination,length:v})} hide={lamination.type==="Velvet"||lamination.type==="Per Sheet"||!!customLamTypes.find(t=>t.name===lamination.type)} />
+                <Field label="Job Width (in)"  value={lamination.width}  onChange={v=>setLamination({...lamination,width:v})} hide={lamination.type==="Velvet"||lamination.type==="Per Sheet"||!!customLamTypes.find(t=>t.name===lamination.type)} />
+                <Field label="Area (sq in)" value={(n(lamination.length)*n(lamination.width)).toFixed(2)} readOnly hide={lamination.type==="Velvet"||lamination.type==="Per Sheet"||!!customLamTypes.find(t=>t.name===lamination.type)} />
                 <Field label="Sheet Qty" value={lamination.sheetQty} onChange={v=>setLamination({...lamination,sheetQty:v})} />
                 <Field label="Rate / Sheet (₹)" value={lamination.velvetRate} onChange={v=>setLamination({...lamination,velvetRate:v})} hide={lamination.type!=="Velvet"} />
+                <Field label="Rate / Sheet (₹)" value={lamination.perSheetRate} onChange={v=>setLamination({...lamination,perSheetRate:v})} hide={lamination.type!=="Per Sheet"} />
               </Row>
-              {lamination.type==="Gloss"  && <Hint text={`(L × W) ÷ ${lamination.glossDivisor} × ${lamination.glossPaisa} × Sheets`} />}
-              {lamination.type==="Matt"   && <Hint text={`(L × W) ÷ ${lamination.mattDivisor} × ${lamination.mattPaisa} × Sheets`} />}
-              {lamination.type==="Velvet" && <Hint text={`₹${lamination.velvetRate} per sheet`} />}
+              {customLamTypes.find(t=>t.name===lamination.type) && (
+                <div style={{ fontSize:11, color:T.textMid, background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:5, padding:"5px 10px", marginBottom:6 }}>
+                  Custom Type: ₹{customLamTypes.find(t=>t.name===lamination.type)?.ratePerSheet}/sheet × {lamination.sheetQty||0} sheets
+                </div>
+              )}
+              {lamination.type==="Gloss"     && <Hint text={`(L × W) ÷ ${lamination.glossDivisor} × ${lamination.glossPaisa} × Sheets`} />}
+              {lamination.type==="Matt"      && <Hint text={`(L × W) ÷ ${lamination.mattDivisor} × ${lamination.mattPaisa} × Sheets`} />}
+              {lamination.type==="Velvet"    && <Hint text={`₹${lamination.velvetRate}/sheet × Sheets`} />}
+              {lamination.type==="Per Sheet" && <Hint text={`₹${lamination.perSheetRate}/sheet × ${lamination.sheetQty||0} = ₹${fmt(laminationTotal)}`} />}
               <SubRow label="Total Lamination" value={laminationTotal} highlight />
             </SectionCard>
 
             {/* ══ FOILING ══ */}
             <SectionCard title="Foiling" icon="🌟" enabled={foiling.enabled} onToggle={v=>setFoiling({...foiling,enabled:v})} total={foilingTotal}>
-              <Row>
-                <Field label="Length (in)" value={foiling.length} onChange={v=>setFoiling({...foiling,length:v})} />
-                <Field label="Width (in)" value={foiling.width} onChange={v=>setFoiling({...foiling,width:v})} />
-                <Field label="Area (sq in)" value={(n(foiling.length)*n(foiling.width)).toFixed(2)} readOnly />
-                <Field label="No of Blocks" value={foiling.numBlocks} onChange={v=>setFoiling({...foiling,numBlocks:v})} />
-                <Field label="No of Sheets" value={foiling.numSheets} onChange={v=>setFoiling({...foiling,numSheets:v})} />
-                <Field label="Total Price" value={fmt(foilingTotal)} readOnly />
-              </Row>
-              <Hint text="L × W × ₹2 × No. of Blocks × No. of Sheets" />
+              {/* Mode selector */}
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:7, padding:"8px 14px", flexWrap:"wrap" }}>
+                <span style={{ fontSize:12, fontWeight:700, color:"#1e40af" }}>Foiling Mode:</span>
+                {["Area Based","Per Sheet",...customFoilTypes.map(t=>t.name)].map(mode=>(
+                  <ModeBtn key={mode} label={mode} active={foiling.mode===mode} onClick={()=>setFoiling({...foiling,mode:mode})} />
+                ))}
+              </div>
+              {foiling.mode==="Area Based" && (
+                <Row>
+                  <Field label="Length (in)" value={foiling.length} onChange={v=>setFoiling({...foiling,length:v})} />
+                  <Field label="Width (in)"  value={foiling.width}  onChange={v=>setFoiling({...foiling,width:v})} />
+                  <Field label="Area (sq in)" value={(n(foiling.length)*n(foiling.width)).toFixed(2)} readOnly />
+                  <Field label="No of Blocks" value={foiling.numBlocks} onChange={v=>setFoiling({...foiling,numBlocks:v})} />
+                  <Field label="No of Sheets" value={foiling.numSheets} onChange={v=>setFoiling({...foiling,numSheets:v})} />
+                  <Field label="Rate / sq in (₹)" value={foiling.areaRate} onChange={v=>setFoiling({...foiling,areaRate:v})} />
+                </Row>
+              )}
+              {foiling.mode==="Per Sheet" && (
+                <Row>
+                  <Field label="No of Sheets" value={foiling.numSheets} onChange={v=>setFoiling({...foiling,numSheets:v})} />
+                  <Field label="Rate / Sheet (₹)" value={foiling.perSheetRate} onChange={v=>setFoiling({...foiling,perSheetRate:v})} />
+                  <Field label="Total Price" value={fmt(foilingTotal)} readOnly />
+                  <div style={{ flex:2 }} />
+                </Row>
+              )}
+              {customFoilTypes.find(t=>t.name===foiling.mode) && (
+                <Row>
+                  <Field label="No of Sheets" value={foiling.numSheets} onChange={v=>setFoiling({...foiling,numSheets:v})} />
+                  <Field label="Total Price" value={fmt(foilingTotal)} readOnly />
+                  <div style={{ flex:3 }} />
+                </Row>
+              )}
+              {foiling.mode==="Area Based" && <Hint text={`L × W × ₹${foiling.areaRate} × ${foiling.numBlocks||1} Blocks × Sheets`} />}
+              {foiling.mode==="Per Sheet"  && <Hint text={`₹${foiling.perSheetRate}/sheet × ${foiling.numSheets||0} = ₹${fmt(foilingTotal)}`} />}
+              <SubRow label="Total Foiling" value={foilingTotal} highlight />
             </SectionCard>
 
             {/* ══ FOILING BLOCK ══ */}
             <SectionCard title="Foiling Block (Making Charge)" icon="🔲" enabled={foilingBlock.enabled} onToggle={v=>setFoilingBlock({...foilingBlock,enabled:v})} total={foilingBTotal}>
               <Row>
                 <Field label="Length (in)" value={foilingBlock.length} onChange={v=>setFoilingBlock({...foilingBlock,length:v})} />
-                <Field label="Width (in)" value={foilingBlock.width} onChange={v=>setFoilingBlock({...foilingBlock,width:v})} />
+                <Field label="Width (in)"  value={foilingBlock.width}  onChange={v=>setFoilingBlock({...foilingBlock,width:v})} />
                 <Field label="Area (sq in)" value={(n(foilingBlock.length)*n(foilingBlock.width)).toFixed(2)} readOnly />
                 <Field label="Making Rate / sq in (₹)" value={foilingBlock.rate} onChange={v=>setFoilingBlock({...foilingBlock,rate:v})} />
                 <Field label="Total Price" value={fmt(foilingBTotal)} readOnly />
@@ -689,20 +1096,45 @@ function App() {
               <Hint text="L × W × Rate" />
             </SectionCard>
 
-            {/* ══ DIE BLOCK — UPDATED ══ */}
+            {/* ══ DIE BLOCK — 3 MODES ══ */}
             <SectionCard title="Die Block" icon="⬛" enabled={dieBlock.enabled} onToggle={v=>setDieBlock({...dieBlock,enabled:v})} total={dieBlockTotal}>
-              <Row>
-                <Field label="No of Blocks" value={dieBlock.numBlocks} onChange={v=>setDieBlock({...dieBlock,numBlocks:v})} />
-                <Field label="Rate per Block (₹)" value={dieBlock.rate} onChange={v=>setDieBlock({...dieBlock,rate:v})} />
-                <Field label="Total Price" value={fmt(dieBlockTotal)} readOnly />
-                <div style={{ flex:2 }} />
-              </Row>
-              <Hint text="No. of Blocks × Rate per Block" />
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:7, padding:"8px 14px" }}>
+                <span style={{ fontSize:12, fontWeight:700, color:"#1e40af" }}>Charge Mode:</span>
+                {["Rate per Block","Rate per sq inch","Fixed Price"].map(mode=>(
+                  <ModeBtn key={mode} label={mode} active={dieBlock.rateMode===mode} onClick={()=>setDieBlock({...dieBlock,rateMode:mode})} />
+                ))}
+              </div>
+              {dieBlock.rateMode==="Rate per Block" && (
+                <Row>
+                  <Field label="No of Blocks" value={dieBlock.numBlocks} onChange={v=>setDieBlock({...dieBlock,numBlocks:v})} />
+                  <Field label="Rate per Block (₹)" value={dieBlock.rate} onChange={v=>setDieBlock({...dieBlock,rate:v})} />
+                  <Field label="Total Price" value={fmt(dieBlockTotal)} readOnly />
+                  <div style={{ flex:2 }} />
+                </Row>
+              )}
+              {dieBlock.rateMode==="Rate per sq inch" && (
+                <Row>
+                  <Field label="Length (in)" value={dieBlock.length} onChange={v=>setDieBlock({...dieBlock,length:v})} />
+                  <Field label="Width (in)"  value={dieBlock.width}  onChange={v=>setDieBlock({...dieBlock,width:v})} />
+                  <Field label="Area (sq in)" value={(n(dieBlock.length)*n(dieBlock.width)).toFixed(2)} readOnly />
+                  <Field label="Rate / sq in (₹)" value={dieBlock.rate} onChange={v=>setDieBlock({...dieBlock,rate:v})} />
+                  <Field label="Total Price" value={fmt(dieBlockTotal)} readOnly />
+                </Row>
+              )}
+              {dieBlock.rateMode==="Fixed Price" && (
+                <Row>
+                  <Field label="Fixed Price (₹)" value={dieBlock.fixedPrice} onChange={v=>setDieBlock({...dieBlock,fixedPrice:v})} />
+                  <Field label="Total Price" value={fmt(dieBlockTotal)} readOnly />
+                  <div style={{ flex:3 }} />
+                </Row>
+              )}
+              {dieBlock.rateMode==="Rate per Block"   && <Hint text={`${dieBlock.numBlocks||1} Blocks × ₹${dieBlock.rate} = ₹${fmt(dieBlockTotal)}`} />}
+              {dieBlock.rateMode==="Rate per sq inch" && <Hint text={`L × W × ₹${dieBlock.rate}/sq in = ₹${fmt(dieBlockTotal)}`} />}
+              {dieBlock.rateMode==="Fixed Price"      && <Hint text={`Fixed Die Block Charge: ₹${dieBlock.fixedPrice||0}`} />}
             </SectionCard>
 
-            {/* ══ DIE CUTTING — UPDATED ══ */}
+            {/* ══ DIE CUTTING ══ */}
             <SectionCard title="Die Cutting" icon="✂️" enabled={dieCutting.enabled} onToggle={v=>setDieCutting({...dieCutting,enabled:v})} total={dieCutTotal}>
-              {/* Mode Toggle */}
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:7, padding:"8px 14px" }}>
                 <span style={{ fontSize:12, fontWeight:700, color:"#1e40af" }}>Charge Mode:</span>
                 {["Per 1000 Sheets","Fixed Charge"].map(mode=>(
@@ -725,19 +1157,16 @@ function App() {
               )}
               {dieCutting.rateMode==="Per 1000 Sheets"
                 ? <Hint text={`₹${dieCutting.rate} × ${dieCutting.sheetQty||0} ÷ 1000 = ₹${fmt(dieCutTotal)}`} />
-                : <Hint text={`Fixed Charge: ₹${dieCutting.fixedCharge||0}`} />
-              }
+                : <Hint text={`Fixed Charge: ₹${dieCutting.fixedCharge||0}`} />}
             </SectionCard>
 
-            {/* ══ PASTING — UPDATED ══ */}
+            {/* ══ PASTING ══ */}
             <SectionCard title="Pasting" icon="📦" enabled={pasting.enabled} onToggle={v=>setPasting({...pasting,enabled:v})} total={pastingCalc.total}>
-
-              {/* Lock Pasting Row */}
               <div style={{ background:"#f8faff", border:"1.5px solid #c5d8f8", borderRadius:8, padding:"12px 14px", marginBottom:10 }}>
                 <div style={{ fontSize:11, fontWeight:800, color:T.primary, textTransform:"uppercase", letterSpacing:.8, marginBottom:8 }}>🔒 Lock Pasting</div>
                 <Row>
                   <Field label="Sheet Qty" value={pasting.lockQty} onChange={v=>setPasting({...pasting,lockQty:v})} />
-                  <Field label="Rate (₹ per 1000)" value={pasting.lockRate} onChange={v=>setPasting({...pasting,lockRate:v})} />
+                  <Field label="Rate (₹/1000)" value={pasting.lockRate} onChange={v=>setPasting({...pasting,lockRate:v})} />
                   <div style={{ flex:1, minWidth:85 }}>
                     <label style={LBL}>Total</label>
                     <input value={fmt(pastingCalc.lock)} readOnly style={BASE_RO} />
@@ -746,13 +1175,11 @@ function App() {
                 </Row>
                 <Hint text={`₹${pasting.lockRate} × ${pasting.lockQty||0} ÷ 1000 = ₹${fmt(pastingCalc.lock)}`} />
               </div>
-
-              {/* Side Pasting Row */}
               <div style={{ background:"#f8faff", border:"1.5px solid #c5d8f8", borderRadius:8, padding:"12px 14px", marginBottom:10 }}>
                 <div style={{ fontSize:11, fontWeight:800, color:"#7c3aed", textTransform:"uppercase", letterSpacing:.8, marginBottom:8 }}>↔️ Side Pasting</div>
                 <Row>
                   <Field label="Sheet Qty" value={pasting.sideQty} onChange={v=>setPasting({...pasting,sideQty:v})} />
-                  <Field label="Rate (₹ per 1000)" value={pasting.sideRate} onChange={v=>setPasting({...pasting,sideRate:v})} />
+                  <Field label="Rate (₹/1000)" value={pasting.sideRate} onChange={v=>setPasting({...pasting,sideRate:v})} />
                   <div style={{ flex:1, minWidth:85 }}>
                     <label style={LBL}>Total</label>
                     <input value={fmt(pastingCalc.side)} readOnly style={BASE_RO} />
@@ -761,15 +1188,13 @@ function App() {
                 </Row>
                 <Hint text={`₹${pasting.sideRate} × ${pasting.sideQty||0} ÷ 1000 = ₹${fmt(pastingCalc.side)}`} />
               </div>
-
               <SubRow label="Lock Pasting" value={pastingCalc.lock} />
               <SubRow label="Side Pasting" value={pastingCalc.side} />
               <SubRow label="Total Pasting" value={pastingCalc.total} highlight />
             </SectionCard>
 
-            {/* ══ PACKAGING — UPDATED ══ */}
+            {/* ══ PACKAGING ══ */}
             <SectionCard title="Packaging" icon="🎁" enabled={packaging.enabled} onToggle={v=>setPackaging({...packaging,enabled:v})} total={packagingTotal}>
-              {/* Mode Toggle */}
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:7, padding:"8px 14px" }}>
                 <span style={{ fontSize:12, fontWeight:700, color:"#1e40af" }}>Charge Mode:</span>
                 {["Per Carton","Fixed Price"].map(mode=>(
@@ -792,45 +1217,32 @@ function App() {
               )}
               {packaging.mode==="Per Carton"
                 ? <Hint text={`${packaging.numCartons||0} Cartons × ₹${packaging.ratePerCarton} = ₹${fmt(packagingTotal)}`} />
-                : <Hint text={`Fixed Packaging Charge: ₹${packaging.fixedPrice||0}`} />
-              }
+                : <Hint text={`Fixed: ₹${packaging.fixedPrice||0}`} />}
             </SectionCard>
 
-            {/* ══ DISPATCH — UPDATED ══ */}
+            {/* ══ DISPATCH ══ */}
             <SectionCard title="Forwarding / Dispatch" icon="🚚" enabled={dispatch.enabled} onToggle={v=>setDispatch({...dispatch,enabled:v})} total={dispatchTotal}>
               <Row>
                 <Field label="Fixed Dispatch Rate (₹)" value={dispatch.fixedRate} onChange={v=>setDispatch({...dispatch,fixedRate:v})} />
                 <Field label="Total Amount" value={fmt(dispatchTotal)} readOnly />
                 <div style={{ flex:3 }} />
               </Row>
-              <Hint text={`Fixed Forwarding / Dispatch Charge: ₹${dispatch.fixedRate||0}`} />
-              <div style={{ marginTop:8, fontSize:11, color:T.textDim, fontStyle:"italic" }}>
-                💡 Typical range: ₹600 – ₹700. Set your standard rate in ⚙️ Settings.
-              </div>
+              <Hint text={`Fixed Dispatch Charge: ₹${dispatch.fixedRate||0}`} />
+              <div style={{ marginTop:8, fontSize:11, color:T.textDim, fontStyle:"italic" }}>💡 Typical range: ₹600 – ₹700</div>
             </SectionCard>
 
-            {/* ══ EXTRA CHARGE — NEW ══ */}
+            {/* ══ EXTRA CHARGE ══ */}
             <SectionCard title="Extra Charge" icon="➕" enabled={extraCharge.enabled} onToggle={v=>setExtraCharge({...extraCharge,enabled:v})} total={extraChargeTotal}>
               <Row>
                 <div style={{ flex:3, minWidth:200 }}>
                   <label style={LBL}>Description / Remark</label>
-                  <input
-                    type="text"
-                    value={extraCharge.description}
-                    placeholder="e.g. Urgent charges, Special handling, Misc..."
-                    onChange={e=>setExtraCharge({...extraCharge,description:e.target.value})}
-                    style={{ ...BASE_INP }}
-                  />
+                  <input type="text" value={extraCharge.description} placeholder="e.g. Urgent charges, Special handling..."
+                    onChange={e=>setExtraCharge({...extraCharge,description:e.target.value})} style={BASE_INP} />
                 </div>
                 <div style={{ flex:1, minWidth:140 }}>
                   <label style={LBL}>Amount (₹)</label>
-                  <input
-                    type="number"
-                    value={extraCharge.amount}
-                    placeholder="0"
-                    onChange={e=>setExtraCharge({...extraCharge,amount:e.target.value})}
-                    style={{ ...BASE_INP }}
-                  />
+                  <input type="number" value={extraCharge.amount} placeholder="0"
+                    onChange={e=>setExtraCharge({...extraCharge,amount:e.target.value})} style={BASE_INP} />
                 </div>
                 <Field label="Total" value={fmt(extraChargeTotal)} readOnly />
               </Row>
@@ -839,7 +1251,7 @@ function App() {
 
           </div>{/* end left col */}
 
-          {/* RIGHT — STICKY SUMMARY */}
+          {/* ══ RIGHT — STICKY SUMMARY ══ */}
           <div className="no-print" style={{ position:"sticky", top:74 }}>
             <div style={{ background:T.bgCard, borderRadius:12, border:`1.5px solid ${T.border}`, boxShadow:T.shadowMd, overflow:"hidden" }}>
               <div style={{ background:T.bgHeader, padding:"14px 18px" }}>
@@ -864,6 +1276,11 @@ function App() {
                 <div style={{ color:T.primary, fontFamily:"monospace", fontSize:28, fontWeight:800 }}>₹{fmt(grandTotal)}</div>
               </div>
               <div style={{ padding:"0 12px 14px", display:"flex", flexDirection:"column", gap:8 }}>
+                {/* Client Slip Button */}
+                <button onClick={()=>setShowQuote(true)} className="btn-primary"
+                  style={{ width:"100%", background:"#1e2d50", color:"#fff", border:"none", padding:10, borderRadius:7, fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
+                  📄 Client Slip / WhatsApp
+                </button>
                 <button onClick={()=>window.print()} className="btn-primary"
                   style={{ width:"100%", background:T.primary, color:"#fff", border:"none", padding:10, borderRadius:7, fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
                   🖨 Print / Save PDF
@@ -876,59 +1293,12 @@ function App() {
             </div>
           </div>
 
-        </div>{/* end grid */}
-      </div>{/* end main */}
-
-      {/* ══ SETTINGS MODAL ══ */}
-      {showSettings && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(15,30,70,.5)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
-          <div style={{ background:T.bgCard, borderRadius:14, width:660, maxHeight:"88vh", overflow:"hidden", display:"flex", flexDirection:"column", boxShadow:"0 20px 60px rgba(15,30,70,.3)", border:`1.5px solid ${T.border}` }}>
-            <div style={{ background:T.bgHeader, padding:"16px 22px", display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0 }}>
-              <div>
-                <div style={{ color:"#fff", fontWeight:800, fontSize:15 }}>⚙️ Rate & Formula Settings</div>
-                <div style={{ color:"rgba(255,255,255,.6)", fontSize:11, marginTop:1 }}>Set default rates — saved in browser for next time</div>
-              </div>
-              <button onClick={()=>setShowSettings(false)} style={{ background:"rgba(255,255,255,.15)", border:"none", color:"#fff", width:30, height:30, borderRadius:6, fontSize:18, cursor:"pointer", fontFamily:"inherit" }}>×</button>
-            </div>
-            <div style={{ overflowY:"auto", padding:"16px 22px 20px", flex:1 }}>
-              {settingGroups.map(group=>(
-                <div key={group.title} style={{ marginBottom:10, borderRadius:8, border:`1.5px solid ${T.border}`, overflow:"hidden" }}>
-                  <div style={{ background:T.bgSection, padding:"9px 14px", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:8 }}>
-                    <span>{group.icon}</span>
-                    <span style={{ fontSize:12, fontWeight:700, color:group.color, textTransform:"uppercase", letterSpacing:.8 }}>{group.title}</span>
-                  </div>
-                  <div style={{ padding:"12px 14px", display:"flex", gap:10, flexWrap:"wrap" }}>
-                    {group.fields.map(f=>(
-                      <div key={f.label} style={{ flex:1, minWidth:170 }}>
-                        <label style={{ display:"block", fontSize:10, fontWeight:700, color:"#4a6494", textTransform:"uppercase", letterSpacing:1, marginBottom:4 }}>{f.label}</label>
-                        <input type="number" value={f.get()} readOnly={!!f.ro}
-                          onChange={e=>!f.ro&&f.set&&f.set(e.target.value)}
-                          style={f.ro ? { ...BASE_INP, background:"#eef4ff", color:"#1a4fd6", fontWeight:700, cursor:"default" } : BASE_INP} />
-                        {f.hint && <div style={{ color:T.textDim, fontSize:10, marginTop:3 }}>{f.hint}</div>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div style={{ padding:"14px 22px", borderTop:`1px solid ${T.border}`, background:T.bgSub, flexShrink:0 }}>
-              <div style={{ display:"flex", gap:8, marginBottom:8 }}>
-                <button onClick={handleSaveSettings} className="btn-primary"
-                  style={{ flex:3, background:T.primary, color:"#fff", border:"none", padding:12, borderRadius:8, fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
-                  💾 Save & Apply Rates
-                </button>
-                <button onClick={handleResetRates}
-                  style={{ flex:1, background:"#fef2f2", color:"#dc2626", border:"1.5px solid #fecaca", padding:12, borderRadius:8, fontSize:13, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
-                  ♻️ Reset
-                </button>
-              </div>
-              <div style={{ fontSize:11, color:"#4a6494", textAlign:"center" }}>
-                💡 Rates auto-load next time you open this file
-              </div>
-            </div>
-          </div>
         </div>
-      )}
+      </div>
+
+      {/* MODALS */}
+      {showQuote    && <QuoteModal />}
+      {showSettings && <SettingsModal />}
 
       {/* ══ HOW TO USE MODAL ══ */}
       {showGuide && (
@@ -940,18 +1310,18 @@ function App() {
             </div>
             <div style={{ overflowY:"auto", padding:"20px 24px" }}>
               {[
-                ["1️⃣","Fill Job Info","Enter job name, client name and date at the top."],
-                ["2️⃣","Paper — Enter SHEET QTY","Enter total sheets directly (e.g. 5000). Equivalent packets/reams shown auto."],
-                ["3️⃣","Die Block","Enter No. of Blocks × Rate = Total."],
-                ["4️⃣","Die Cutting","Choose Per 1000 Sheets (default ₹300) or Fixed Charge. Enter sheet qty."],
-                ["5️⃣","Pasting","Two sub-sections: Lock Pasting (₹250/1000) and Side Pasting (₹100/1000). Enter qty for each."],
-                ["6️⃣","Packaging","Choose Per Carton (₹60/carton) or Fixed Price mode."],
-                ["7️⃣","Dispatch","Enter a fixed forwarding/dispatch amount (default ₹600)."],
-                ["8️⃣","Extra Charge","Add any miscellaneous or additional charges with a description."],
-                ["9️⃣","Set default rates once","Click ⚙️ Rate Settings to set all default rates — saved in browser."],
-                ["🔟","Print or Share","🖨 Print / Save PDF, or 📋 Copy Summary to paste in WhatsApp."],
+                ["1️⃣","Fill Job Info","Job name, client name, date and quote number at the top."],
+                ["2️⃣","Paper — Sheet Qty","Enter total sheets directly (e.g. 5000). Equivalent reams/packets shown automatically."],
+                ["3️⃣","Die Block — 3 Modes","Rate per Block (qty × rate), Rate per sq inch (L×W×rate), or Fixed Price."],
+                ["4️⃣","UV / Lamination","New 'Per Sheet' mode added. Plus add your own custom types (Soft Touch, etc.) via ⚙️ Settings → Custom Types."],
+                ["5️⃣","Foiling — 2 Modes","Area Based (L×W×rate×blocks×sheets) or Per Sheet (flat rate). Custom types available."],
+                ["6️⃣","Die Cutting","Per 1000 Sheets or Fixed Charge mode."],
+                ["7️⃣","Pasting","Lock Pasting + Side Pasting, each with qty and rate per 1000."],
+                ["8️⃣","Packaging","Per Carton or Fixed Price mode."],
+                ["9️⃣","Settings — 3 Tabs","📊 Rates: all default rates. 🏢 Company Info: for client quote. 🎨 Custom Types: add UV/Lam/Foiling types."],
+                ["🔟","Client Quote","Click 📤 Generate Client Quote to preview & print a professional A4 quotation for your client."],
               ].map(([num,title,desc])=>(
-                <div key={title} style={{ display:"flex", gap:14, marginBottom:18, alignItems:"flex-start" }}>
+                <div key={title} style={{ display:"flex", gap:14, marginBottom:16, alignItems:"flex-start" }}>
                   <span style={{ fontSize:22, flexShrink:0 }}>{num}</span>
                   <div>
                     <div style={{ fontWeight:700, color:T.text, fontSize:13, marginBottom:3 }}>{title}</div>
