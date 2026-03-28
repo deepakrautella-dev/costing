@@ -45,7 +45,7 @@
 const { useState, useMemo, useEffect, useRef, useCallback } = React;
 
 /* ════════ MARGIN ════════ */
-const MARGIN = 1.30; // 30% markup applied to client-facing prices (hidden)
+const MARGIN = 1.30;
 
 const T = {
   bgPage:"#f0f5ff", bgCard:"#ffffff", bgHeader:"#1a4fd6",
@@ -488,6 +488,8 @@ function App() {
         grandTotal: grandTotalWithMargin.toFixed(2),
         summaryItems: summaryItems.map(([name,val])=>({name: name.replace(/[^\w ]/g,"").trim(), value: (val*MARGIN).toFixed(2)})),
         paperRows: paperCalc.rows.map(r=>({L:r.length,W:r.width,GSM:r.gsm,sheets:r.sheetQty,kg:r.weight?.toFixed(4),price:r.price?.toFixed(2)})),
+        /* ── Save full section states so records can be fully restored ── */
+        _sections: { paperRows, plates, printing, varnish, uv, lamination, foiling, foilingBlock, dieBlock, dieCutting, pasting, packaging, dispatch, extraCharge },
         savedAt: new Date().toISOString()
       };
       await fetch(sheetsUrl, {
@@ -521,18 +523,44 @@ function App() {
     setRecordsLoading(false);
   };
 
-  /* ── LOAD OLD RECORD ── */
+  /* ── LOAD OLD RECORD — fully restores all sections ── */
   const loadRecord = (rec) => {
     try {
       const p = typeof rec.jsonData === "string" ? JSON.parse(rec.jsonData) : rec.jsonData;
       if(!p) return;
-      setJobName(p.jobName||""); setClientName(p.clientName||"");
-      setJobDate(p.date||new Date().toISOString().split("T")[0]);
-      setQuoteNo(p.id||genQuoteNo());
+
+      /* ── Basic job info ── */
+      setJobName(p.jobName || "");
+      setClientName(p.clientName || "");
+      setJobDate(p.date || new Date().toISOString().split("T")[0]);
+      setQuoteNo(p.id || genQuoteNo());
+
+      /* ── Full section states (saved under _sections key) ── */
+      const s = p._sections || {};
+
+      if(s.paperRows && Array.isArray(s.paperRows) && s.paperRows.length > 0) {
+        setPaperRows(s.paperRows);
+      }
+      if(s.plates)       setPlates({      ...DEFAULTS.plates,      ...s.plates      });
+      if(s.printing)     setPrinting({    ...DEFAULTS.printing,    ...s.printing    });
+      if(s.varnish)      setVarnish({     ...DEFAULTS.varnish,     ...s.varnish     });
+      if(s.uv)           setUV({          ...DEFAULTS.uv,          ...s.uv          });
+      if(s.lamination)   setLamination({  ...DEFAULTS.lamination,  ...s.lamination  });
+      if(s.foiling)      setFoiling({     ...{enabled:false,mode:"Area Based",length:"",width:"",numBlocks:1,numSheets:"",areaRate:2,perSheetRate:2}, ...s.foiling });
+      if(s.foilingBlock) setFoilingBlock({...DEFAULTS.foilingBlock,...s.foilingBlock});
+      if(s.dieBlock)     setDieBlock({    ...DEFAULTS.dieBlock,    ...s.dieBlock    });
+      if(s.dieCutting)   setDieCutting({  ...DEFAULTS.dieCutting,  ...s.dieCutting  });
+      if(s.pasting)      setPasting({     ...DEFAULTS.pasting,     ...s.pasting     });
+      if(s.packaging)    setPackaging({   ...DEFAULTS.packaging,   ...s.packaging   });
+      if(s.dispatch)     setDispatch({    ...DEFAULTS.dispatch,    ...s.dispatch    });
+      if(s.extraCharge)  setExtraCharge({ ...DEFAULTS.extraCharge, ...s.extraCharge });
+
       setShowRecords(false);
-      setSaveMsg("📂 Record loaded: " + (p.jobName||p.id));
-      setTimeout(()=>setSaveMsg(""),3000);
-    } catch(e){ alert("Could not load this record."); }
+      setSaveMsg("📂 Record loaded: " + (p.jobName || p.id));
+      setTimeout(()=>setSaveMsg(""), 3000);
+    } catch(e) {
+      alert("Could not load this record.");
+    }
   };
 
   /* ── COPY UTILS ── */
@@ -733,7 +761,7 @@ _This is an estimated amount. Final may vary._`;
               </div>
             </div>
 
-            {/* Breakdown table — prices × MARGIN (hidden from label) */}
+            {/* Breakdown table */}
             {slipShowBreakdown && summaryItems.length>0 && (
               <table style={{width:"100%",borderCollapse:"collapse",marginBottom:16,fontSize:13}}>
                 <thead>
@@ -757,7 +785,7 @@ _This is an estimated amount. Final may vary._`;
               </table>
             )}
 
-            {/* Total block — with margin */}
+            {/* Total block */}
             <div style={{display:"flex",justifyContent:"flex-end",marginBottom:22}}>
               <div style={{background:"#1a4fd6",borderRadius:9,padding:"15px 28px",textAlign:"right",minWidth:240}}>
                 <div style={{color:"rgba(255,255,255,.6)",fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:1.5,marginBottom:4}}>
@@ -1067,7 +1095,6 @@ _This is an estimated amount. Final may vary._`;
             </div>
           </div>
           <div style={{display:"flex",gap:7,alignItems:"center"}}>
-            {/* Draft indicator */}
             {draftSaved && (
               <div className="draft-pill" style={{background:"rgba(255,255,255,.12)",border:"1px solid rgba(255,255,255,.2)",color:"rgba(255,255,255,.7)",fontSize:10,padding:"3px 10px",borderRadius:12,fontWeight:600}}>
                 💾 Draft saved
@@ -1508,7 +1535,6 @@ _This is an estimated amount. Final may vary._`;
                 {jobDate    && <div style={{color:"rgba(255,255,255,.5)",fontSize:11,marginTop:2}}>{jobDate}</div>}
               </div>
 
-              {/* Internal cost (actual) */}
               <div style={{padding:"10px 16px 4px"}}>
                 <div style={{fontSize:9,fontWeight:800,color:"#8ca5cc",textTransform:"uppercase",letterSpacing:1.2,marginBottom:4}}>Internal Cost (Actual)</div>
                 {summaryItems.length===0
@@ -1522,13 +1548,11 @@ _This is an estimated amount. Final may vary._`;
                 }
               </div>
 
-              {/* Internal total */}
               <div style={{background:"#f5f8ff",margin:"6px 12px 0",borderRadius:7,padding:"10px 14px",border:`1px solid ${T.border}`}}>
                 <div style={{color:T.textMid,fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:1.2,marginBottom:2}}>Your Cost</div>
                 <div style={{color:T.textMid,fontFamily:"monospace",fontSize:20,fontWeight:800}}>₹{fmt(grandTotal)}</div>
               </div>
 
-              {/* Client price (with margin) */}
               <div style={{background:T.bgSection,margin:"8px 12px 12px",borderRadius:8,padding:"14px 16px",border:`1.5px solid ${T.border}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
                   <div style={{color:T.textMid,fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:1.5}}>Client Price (30% Margin)</div>
@@ -1581,7 +1605,7 @@ _This is an estimated amount. Final may vary._`;
                 ["3️⃣","30% Margin","Applied automatically. Your internal cost and client price are shown separately in the summary. Client slip shows only the marked-up price."],
                 ["4️⃣","Auto Draft Save","Your work is saved every second automatically in the browser. Refreshing restores your last session."],
                 ["5️⃣","Google Sheets","Go to ⚙️ Settings → Google Sheets. Follow the one-time setup to connect. After that, click 'Save to Sheets' to log every estimate with a unique ID."],
-                ["6️⃣","Records Search","Click 📂 Records in the nav. Search by job name, client, date or quote number. Click any record to load it back."],
+                ["6️⃣","Records Search","Click 📂 Records in the nav. Search by job name, client, date or quote number. Click any record to load it back — all sections (paper, plates, printing etc.) are fully restored."],
                 ["7️⃣","UV / Lamination","'Per Sheet' mode available. Custom types via ⚙️ Settings → Custom Types."],
                 ["8️⃣","Foiling — 2 Modes","Area Based (L×W×rate×blocks×sheets) or Per Sheet."],
                 ["9️⃣","Die Block — 3 Modes","Rate per Block, Rate per sq inch, or Fixed Price."],
